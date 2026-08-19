@@ -41,6 +41,19 @@ const IDLE_PANE = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Unsubmitted text sitting in the prompt box -- the "PARKOLT INPUT" case
+// (2026-08-19, Sam incident): the router's own alert said "not-ready ...
+// restart the agent if it is wedged" for exactly this pane shape, even
+// though a parked-but-unsubmitted line is not the same failure as a wedged
+// session, and a dedicated recovery path already exists for it.
+const TYPING_PANE = [
+  '',
+  SEP,
+  '❯ vesd ossze a rendelesen szereplo arakkal',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 describe('formatStuckSessionAlert: silent stall becomes a main-agent alert', () => {
   it('produces a [session-stuck] alert naming agent, session, duration and queue depth', () => {
     const alert = formatStuckSessionAlert('prisma', MAIN, 'agent-prisma', 150 * 60 * 1000, 2)
@@ -74,6 +87,21 @@ describe('formatStuckSessionAlert: silent stall becomes a main-agent alert', () 
     expect(alert).toContain('BUSY')
     expect(alert).toContain('Do NOT restart on this alert alone')
     expect(alert).not.toContain('restart the agent if it is wedged')
+  })
+
+  it('says "parked input", not "wedged, restart it", when the pane was typing', () => {
+    // 2026-08-19 (Marci-approved scope: wording only, no cross-check against
+    // the other recovery path -- that part waits until this pattern recurs).
+    // The old generic branch told the reader to restart a session whose real
+    // problem is unsubmitted text sitting in its input box -- true words for
+    // a wedged session, false ones for this. The alert must say what it
+    // actually saw and must not ask for a manual restart on this shape alone.
+    const alert = formatStuckSessionAlert('sam', MAIN, 'agent-sam', 12 * MIN, 1, detectPaneState(TYPING_PANE))!
+    expect(alert).not.toBeNull()
+    expect(alert).toContain('[session-stuck]')
+    expect(alert).toContain('PARKED')
+    expect(alert).not.toContain('restart the agent if it is wedged')
+    expect(alert).not.toContain('BUSY')
   })
 })
 
