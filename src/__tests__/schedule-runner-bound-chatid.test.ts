@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { chatIdFromAccessConfig, channelDeliveryName, resolveSchedulerAlertToken } from '../web/schedule-runner.js'
+import { chatIdFromAccessConfig, channelDeliveryName, resolveSchedulerAlertToken, resolveBoundChannel } from '../web/schedule-runner.js'
 import { PROJECT_ROOT } from '../config.js'
 import { channelStateDir, type ChannelProviderType } from '../channel-provider.js'
+import { normalizeChatId } from '../owner-chat.js'
 
 // Regression guard for 2026-07-27 (Zara report, Marveen diagnosis): the
 // scheduled-task prompt prefix carried a "chat_id: 0" sentinel from a
@@ -11,6 +12,16 @@ import { channelStateDir, type ChannelProviderType } from '../channel-provider.j
 // (assertAllowedChat: "0" is never allowlisted), so every non-heartbeat
 // scheduled task threw at delivery. The fix resolves the agent's own bound
 // chat from its channel access.json at prompt-build time.
+//
+// Second regression guard for 2026-08-19 (WRONGRECIP819, Marci, kanban
+// f1217c23): the "resolve to the first allowlist entry" heuristic below
+// silently misdirected sub-agent task results whenever an agent had 2+ DM
+// contacts -- measured on the live install, 6 of 7 currently-enabled
+// sub-agent `task`-type schedules were affected, either contradicting their
+// own explicit recipient or carrying no real Telegram target at all. Fixed
+// by resolveBoundChannel: a sub-agent with 2+ candidates and no
+// task.telegramChatId pin gets chatId: null + ambiguousCandidates set, never
+// a guessed chat id -- on ANY provider, not just Telegram.
 
 describe('chatIdFromAccessConfig (pure core)', () => {
   it('returns the first DM allowlist entry', () => {
@@ -135,11 +146,28 @@ describe('schedule-runner source contract (sentinel removed, provider-aware)', (
     expect(src).not.toMatch(/kuldd el Telegramon \(chat_id/)
   })
 
-  it('multi-entry allowlists produce an ambiguity warn (heuristic made visible)', () => {
-    // Behaviour stays first-entry; the warn exists so a reordered allowlist
-    // (2+ entries: zara/iris) cannot silently redirect task results.
-    expect(src).toContain('bound-chat resolution is ambiguous')
-    expect(src).toMatch(/candidates > 1/)
+  it('an ambiguous 2+-candidate resolution is SKIPPED, not guessed, and raises visibility, on ANY provider', () => {
+    // WRONGRECIP819: upstream's own multi-provider resolveBoundChannel still
+    // guessed (warn + first-entry) for every provider. A sub-agent with 2+ DM
+    // contacts and no telegramChatId pin must never receive a chat_id guess
+    // in its prompt, regardless of which provider it is bound to.
+    expect(src).toContain('scheduled task: delivery target is ambiguous')
+    expect(src).toContain('logger.error(')
+    expect(src).toContain('createAgentMessage(')
+    expect(src).not.toMatch(/bound-chat resolution is ambiguous[\s\S]{0,80}using the first/)
+    // The ambiguous branch falls through to the SAME bare-tag prefix as the
+    // config-gap branch -- delivery is skipped either way, never guessed.
+    const ambiguousIdx = src.indexOf('scheduled task: delivery target is ambiguous')
+    const nextPrefixIdx = src.indexOf('prefix = `[Utemezett feladat: ${task.name}] `', ambiguousIdx)
+    expect(nextPrefixIdx, 'ambiguous branch must fall through to the bare prefix').toBeGreaterThan(ambiguousIdx)
+  })
+
+  it('a 2+-candidate access.json never resolves to a guessed chat id (function-level contract)', () => {
+    const fnStart = src.indexOf('export function resolveBoundChannel')
+    expect(fnStart, 'resolveBoundChannel not found').toBeGreaterThan(0)
+    const fnBody = src.slice(fnStart, src.indexOf('\n}\n', fnStart))
+    expect(fnBody).toMatch(/candidates > 1\)\s*return\s*\{\s*provider,\s*chatId:\s*null,\s*ambiguousCandidates:\s*candidates\s*\}/)
+    expect(fnBody).not.toContain('logger.warn')
   })
 
   it('resolution reads the access.json for the agent\'s own provider, not always telegram', () => {
@@ -154,5 +182,40 @@ describe('schedule-runner source contract (sentinel removed, provider-aware)', (
     expect(src).not.toContain('sendTelegramMessage')
     expect(src).toContain('sendSchedulerAlertMessage')
     expect(src).toContain('getProvider(CHANNEL_PROVIDER)')
+  })
+
+  it('the main agent resolves from the configured owner chat, with "0" never treated as configured', () => {
+    // Regression guard, distinct from WRONGRECIP819: OWNERCHAT803
+    // (2026-08-03) established that the installer's "0" placeholder must
+    // never be treated as a configured owner chat. Upstream's
+    // resolveBoundChannel has NO main-agent special case at all -- it reads
+    // access.json uniformly for every agent, main included -- so this class
+    // of bug could resurface if that branch's wiring regresses. Two checks:
+    // the wiring exists (source contract) and the underlying "0 is not
+    // configured" guarantee it relies on actually holds (direct call, no
+    // filesystem).
+    const fnStart = src.indexOf('export function resolveBoundChannel')
+    expect(fnStart, 'resolveBoundChannel not found').toBeGreaterThan(0)
+    const fnBody = src.slice(fnStart, src.indexOf('\n}\n', fnStart))
+    expect(fnBody).toMatch(/agentName === MAIN_AGENT_ID/)
+    expect(fnBody).toMatch(/resolveOwnerChatId\(undefined,\s*configuredOwnerChatFor\(provider\),\s*provider\)/)
+    expect(normalizeChatId('0')).toBeNull()
+    expect(normalizeChatId('8668856531')).toBe('8668856531')
+  })
+})
+
+describe('resolveBoundChannel (task.telegramChatId precedence, no filesystem for the pinned cases)', () => {
+  it('"none" means no delivery target, by design -- never falls through to auto-resolution', () => {
+    const result = resolveBoundChannel('sam', { telegramChatId: 'none' })
+    expect(result.chatId).toBeNull()
+    expect(result.ambiguousCandidates).toBeUndefined()
+  })
+
+  it('an explicit chat_id is used as-is, overriding any allowlist heuristic', () => {
+    expect(resolveBoundChannel('max', { telegramChatId: '8321555318' }).chatId).toBe('8321555318')
+  })
+
+  it('an explicit override wins even for the main agent (author intent beats the default)', () => {
+    expect(resolveBoundChannel('pedro', { telegramChatId: '8321555318' }).chatId).toBe('8321555318')
   })
 })
