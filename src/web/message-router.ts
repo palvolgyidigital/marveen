@@ -102,6 +102,20 @@ export function formatStuckSessionAlert(
   if (paneState === 'busy') {
     return `[session-stuck] Agent '${agent}' (tmux ${session}) has been BUSY (actively working, spinner up) for ${min} min with ${queue}. Not a stall by itself -- check whether the turn is progressing or a tool call is wedged. Do NOT restart on this alert alone.`
   }
+  // PARKED input (unsubmitted text sitting in the prompt box) is not the same
+  // failure as a wedged session, and the old generic branch below said
+  // "restart it" regardless -- true for a wedge, false for this (2026-08-19,
+  // Sam incident: the alert asked for a manual restart while the session was
+  // never actually stuck, only unsubmitted). A dedicated recovery path
+  // already exists for parked input (the stale-parked-input janitor and the
+  // stuck-input watcher), so a restart is not the first move here -- this
+  // wording says what was actually seen instead of what a wedge would look
+  // like. Whether that OTHER path is live for this specific instance is not
+  // checked here (scope: wording only, Marci 2026-08-19); if this pattern
+  // recurs, that cross-check is the next step.
+  if (paneState === 'typing') {
+    return `[session-stuck] Agent '${agent}' (tmux ${session}) has PARKED, unsubmitted input sitting in its prompt box for ${min} min with ${queue}. This is not the same as a wedged session -- a dedicated recovery path already exists for parked input and may resolve it without intervention. Check the pane before restarting: a manual Enter, or waiting a bit longer, can resolve it without losing session state.`
+  }
   return `[session-stuck] Agent '${agent}' (tmux ${session}) has been not-ready for ${min} min with ${queue}. Run the delivery-stall diagnosis: check the pane (busy vs idle vs full context) and restart the agent if it is wedged.`
 }
 
