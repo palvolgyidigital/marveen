@@ -179,6 +179,22 @@ EM_DASH = "—"
 # NOT silent: every run appends a loud line to the gate log, because a
 # protection whose absence is invisible only protects until someone touches
 # the tree. File shape: {"bad_name_patterns": ["<python-regex>", ...]}
+#
+# GATEPERSIST816/3 (2026-08-19): the rules file was lost with no backup and no
+# record of its contents -- the name rule itself is gone for good. Treating
+# that the same as a DELIBERATE "we have no name rule right now" would make
+# the loss invisible again, exactly what GATEPERSIST816 was built to prevent.
+# So there are three states, not two: MISSING/CORRUPT keeps the old loud
+# fail-closed behaviour untouched; a rules file that explicitly sets
+# "no_name_rule": true is a sanctioned, visible choice (the file exists and
+# says so, in the store/ directory Marci and Pedro both see) and is treated as
+# "nothing to check" everywhere, silently -- an ordinary empty
+# bad_name_patterns list WITHOUT that flag is not enough, so an empty list
+# left behind by accident cannot masquerade as the sanctioned state.
+NAME_RULE_MISSING = "missing"
+NAME_RULE_EXPLICIT_NONE = "explicit_none"
+NAME_RULE_ACTIVE = "active"
+
 _LOCAL_RULES = os.environ.get(
     "OUTGOING_COPY_GATE_RULES",
     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -186,16 +202,7 @@ _LOCAL_RULES = os.environ.get(
 )
 
 
-def load_bad_name():
-    try:
-        with open(_LOCAL_RULES, encoding="utf-8") as fh:
-            pats = json.load(fh).get("bad_name_patterns") or []
-        if pats:
-            return re.compile("|".join(pats))
-    except OSError:
-        pass
-    except Exception:
-        pass
+def _log_missing_rules():
     try:
         log_path = os.path.join(os.path.dirname(_LOCAL_RULES), "outgoing-copy-gate.log")
         with open(log_path, "a", encoding="utf-8") as fh:
@@ -203,7 +210,34 @@ def load_bad_name():
                      "a nev-ellenorzes NEM fut; potold a store/outgoing-copy-gate-rules.json-t.\n")
     except OSError:
         pass
-    return None
+
+
+def load_bad_name():
+    """Returns (pattern_or_None, state) -- state is one of NAME_RULE_MISSING,
+    NAME_RULE_EXPLICIT_NONE, NAME_RULE_ACTIVE."""
+    try:
+        with open(_LOCAL_RULES, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except OSError:
+        _log_missing_rules()
+        return None, NAME_RULE_MISSING
+    except Exception:
+        _log_missing_rules()
+        return None, NAME_RULE_MISSING
+
+    pats = data.get("bad_name_patterns") or []
+    if pats:
+        try:
+            return re.compile("|".join(pats)), NAME_RULE_ACTIVE
+        except re.error:
+            _log_missing_rules()
+            return None, NAME_RULE_MISSING
+
+    if data.get("no_name_rule") is True:
+        return None, NAME_RULE_EXPLICIT_NONE
+
+    _log_missing_rules()
+    return None, NAME_RULE_MISSING
 
 
 def _name_correction() -> str:
@@ -215,7 +249,7 @@ def _name_correction() -> str:
         return ""
 
 
-BAD_NAME = load_bad_name()
+BAD_NAME, NAME_RULE_STATE = load_bad_name()
 ACCENTED = set("áéíóöőúüűÁÉÍÓÖŐÚÜŰ")
 WORD = re.compile(r"[a-záéíóöőúüűA-ZÁÉÍÓÖŐÚÜŰ]+")
 TAG = re.compile(r"<[^>]+>")
@@ -364,7 +398,10 @@ def telegram_gate(tool_input: dict) -> None:
     # de a figyelmeztetes ODA megy, ahol a session tenyleg latja -- a hook
     # stdout systemMessage mezoje a futo sessionben jelenik meg, nem egy
     # logfajlban, amit senki nem olvas.
-    if BAD_NAME is None:
+    # GATEPERSIST816/3: csak a MISSING/CORRUPT allapot kap figyelmeztetest --
+    # a tudatosan ures szabaly (explicit_none) mar nem veszteseg, nincs mit
+    # jelezni, a Telegram-ag csendben marad.
+    if NAME_RULE_STATE == NAME_RULE_MISSING:
         print(json.dumps({"systemMessage":
             "outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
             f"({_LOCAL_RULES}) -- a nev-ellenorzes NEM fut a kimeno uzeneteken. "
@@ -470,7 +507,11 @@ def main():
     # csendben lealit nev-ellenorzes mellett kuldeni rosszabb, mint megvarni a
     # szabaly-fajl potlasat. (A telegram-ag fail-open marad systemMessage
     # figyelmeztetessel: az a felugyeleti csatorna, ott a nemulas a dragabb.)
-    if BAD_NAME is None:
+    # GATEPERSIST816/3: ez KIZAROLAG a MISSING/CORRUPT allapotra vonatkozik --
+    # a tudatosan ures szabaly (explicit_none, a fajlban explicit
+    # no_name_rule=true) mar nem veletlen veszteseg, hanem vallalt allapot, az
+    # email mehet.
+    if NAME_RULE_STATE == NAME_RULE_MISSING:
         sys.stderr.write(
             "KIMENO-SZOVEG KAPU: TILTVA -- a NEV-SZABALY fajl hianyzik/ures "
             f"({_LOCAL_RULES}), igy a nev-ellenorzes nem tud lefutni.\n"
