@@ -38,7 +38,11 @@ if ! npm run build >/tmp/upstream-sync-build.log 2>&1; then
   fail "a rebase utani BUILD elbukott, visszaalltam a korabbi allapotra ($BEFORE). Reszletek: /tmp/upstream-sync-build.log"
 fi
 
-git push origin develop --quiet || fail "a push a forkra nem sikerult, a helyi develop mar rebase-elt allapotban van ($(git rev-parse --short HEAD))"
+# A rebase ATIRJA a sajat commitjaink hash-eit, ezert a fork develop aga mindig divergal a helyitol.
+# Sima push ezert SOHA nem tud sikerulni, amint az upstream elore megy (2026-08-25-en elesben ez tortent).
+# --force-with-lease: csak akkor ir felul, ha az origin pontosan ott all, ahol a legutobbi fetch-nel lattuk.
+# Ha kozben barki mas pusholt, ELUTASIT ahelyett hogy elgazolna. Sima --force-ot NE hasznalj itt.
+git push --force-with-lease origin develop --quiet || fail "a push a forkra nem sikerult (--force-with-lease elutasitva: valaki mas pusholt az origin/develop-ra a legutobbi fetch ota?). A helyi develop mar rebase-elt allapotban van ($(git rev-parse --short HEAD)). NE eross force-old, eloszor nezd meg mi van az originon."
 
 echo "UPSTREAM-SYNC OK: $NEW upstream commit behuzva, sajat javitasok a tetejen, forkra feltoltve. $(git rev-parse --short "$BEFORE") -> $(git rev-parse --short HEAD)"
 git log --oneline "$BEFORE".."$(git rev-parse HEAD)" | head -20
