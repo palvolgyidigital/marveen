@@ -329,6 +329,39 @@ export function ensureAgentStalenessHook(name: string): boolean {
   return true
 }
 
+// Idempotent migration: ensure the message-dedup-guard UserPromptSubmit hook
+// is present (ea2eb050, 2026-08-26). Same merge shape as ensureAgentStaleness
+// Hook -- reaches the existing fleet, not just freshly-scaffolded agents.
+// This is the mechanical backstop half of the ea2eb050 fix: the sender-side
+// confirmation check (confirmsDeliveryDespitePriorBusy) closes most of the
+// silent-loss risk before a message is ever resent, but cannot reach zero on
+// its own (scrollback is bounded); this hook makes a resend of a message that
+// had, in fact, already landed a harmless no-op instead of a duplicate turn.
+// Fail-open wrapper, same reasoning as the staleness guard's.
+const _dedupGuardScript = join(PROJECT_ROOT, 'scripts', 'hooks', 'message-dedup-guard.py')
+const DEDUP_GUARD_HOOK_CMD = `bash -c '[ -f ${_dedupGuardScript} ] && exec python3 ${_dedupGuardScript}; exit 0'`
+
+export function ensureMessageDedupGuardHook(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ups = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit as unknown[] : []
+  const already = JSON.stringify(ups).includes('message-dedup-guard.py')
+  if (already) return false
+  if (isUnsafeHookCommand(DEDUP_GUARD_HOOK_CMD)) return false
+  ups.push({ hooks: [{ type: 'command', command: DEDUP_GUARD_HOOK_CMD, timeout: 10 }] })
+  hooks.UserPromptSubmit = ups
+  settings.hooks = hooks
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
 export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemplate): void {
   const agentRoot = agentDir(name)
   const settingsDir = join(agentRoot, '.claude')
