@@ -1901,6 +1901,24 @@ export function paneShowsContextSaturation(capture: string): boolean {
 // scrollback), is there positive proof the payload actually reached the
 // pane? A 'done' backed by this proof is as good as the ordinary idle-before-
 // send case; a 'done' without it must not be trusted blindly.
+//
+// WRAP826 (Pedro's review, 2026-08-26): the fleet's panes are 80 columns and
+// capture-pane is never called with -J, so a payloadHint (up to 96 chars,
+// see agent-process.ts) that landed PERFECTLY can still get a newline spliced
+// into the middle of it by terminal line-wrapping -- a raw String.includes
+// then returns false almost every time in exactly the ambiguous case this
+// function exists to resolve, which would have made the "confirm" check
+// nearly always fail and the defensive-resend path fire on the vast majority
+// of ordinary, successful busy-pre-send deliveries. Confirmed by simulation:
+// a 96-char hint on an 80-col pane reliably wraps, and raw includes() misses
+// it while a whitespace-collapsed comparison finds it. Both sides are
+// normalized (all whitespace -- space AND newline -- collapsed away) before
+// comparing, so the search survives wrapping, indentation and any amount of
+// re-flow, and does not depend on the pane's column width at all.
+function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, '')
+}
+
 export function confirmsDeliveryDespitePriorBusy(
   wasBusyPreSend: boolean,
   paneWithHistory: string | null,
@@ -1910,5 +1928,25 @@ export function confirmsDeliveryDespitePriorBusy(
   // afterward is unambiguous. No extra proof needed.
   if (!wasBusyPreSend) return true
   if (paneWithHistory == null || !payloadHint) return false
-  return paneWithHistory.includes(payloadHint)
+  return collapseWhitespace(paneWithHistory).includes(collapseWhitespace(payloadHint))
+}
+
+// DEDUPSCOPE826 (Pedro's review, 2026-08-26): sendPromptToSession delivers
+// more than inter-agent messages -- scheduled-task prompts and channel-
+// inbound text go through the exact same retry loop, but neither carries the
+// "msg_id:<N>" marker wrapAgentMessageForDelivery stamps on trusted-peer /
+// untrusted / federated messages, and message-dedup-guard.py (the mechanical
+// backstop) keys off exactly that marker. A defensive resend on an
+// unconfirmed 'done' is only SAFE when something downstream can recognise
+// and no-op a duplicate; for a payload with no dedup marker, an unnecessary
+// resend would be a REAL second execution (a button-triggered task run
+// twice, a Telegram reply sent twice), not a harmless no-op. This is the
+// narrow gate: only payloads carrying dedup coverage are eligible for the
+// active resend path. Everything else keeps the pre-existing behaviour
+// (trust 'done' as before -- no new risk introduced for the uncovered
+// paths, same disclosed ~1-2% ambiguous rate as before this fix).
+const DEDUP_MARKER_RX = /\bmsg_id:\d+\b/
+
+export function hasDedupCoverage(text: string): boolean {
+  return DEDUP_MARKER_RX.test(text)
 }
