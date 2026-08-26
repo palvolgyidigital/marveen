@@ -30,6 +30,7 @@ export const KNOWN_HOOK_SCRIPTS: readonly string[] = [
   'voice-reply-directive.py',
   'staleness-guard.py',
   'provenance-gate.py',
+  'message-dedup-guard.py',
   'email-send-gate.mjs',
   'self-pace-gate.mjs',
   'telegram_progress.py',
