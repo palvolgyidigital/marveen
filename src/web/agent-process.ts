@@ -24,6 +24,7 @@ import {
   detectsFeedbackDraftModal,
   detectsFeedbackOptOutPrompt,
   firstRunAcceptKeys,
+  confirmsDeliveryDespitePriorBusy,
   type FirstRunGateKind,
 } from '../pane-state.js'
 import { agentDir, listAgentNames, readAgentModel, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentRunAsUser, readAgentMemoryIsolation } from './agent-config.js'
@@ -2239,6 +2240,17 @@ export async function sendPromptToSession(
     }
     runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
   }
+
+  // BUSYCONFIRM826 (ea2eb050): was the pane ALREADY busy before we typed
+  // anything? If so, a busy reading right after we send is NOT proof our
+  // message landed -- it could equally be an unrelated prior turn still
+  // running, with our text silently vanishing behind it. Captured once here,
+  // before sendChunks(), so the retry loop below can tell the two cases
+  // apart. A capture failure defaults to "not provably idle", i.e. treated
+  // as busy -- the safer direction (demands confirmation) when we cannot see.
+  const preSendPane = capturePane(session, host)
+  const preSendBusy = preSendPane == null || detectPaneState(preSendPane) === 'busy'
+
   await sendChunks()
 
   // Post-send retry loop. The payload hint is the first chunk of oneLine
@@ -2264,7 +2276,37 @@ export async function sendPromptToSession(
     await delay(SUBMIT_RETRY_POLL_MS)
     const pane = capturePane(session, host)
     const action = decideSubmitFollowup(pane, payloadHint, attempt, SUBMIT_RETRY_MAX_ATTEMPTS)
-    if (action === 'done') break
+    if (action === 'done') {
+      // BUSYCONFIRM826: an ordinary 'done' (pane was idle before we sent) is
+      // trusted as before -- confirmsDeliveryDespitePriorBusy is a no-op in
+      // that case. Only when the pane was ALREADY busy pre-send do we demand
+      // positive proof (the payload found in a wider, scrollback-inclusive
+      // capture) before trusting it.
+      if (confirmsDeliveryDespitePriorBusy(preSendBusy, preSendBusy ? capturePaneWithScrollback(session, host) : null, payloadHint)) {
+        break
+      }
+      // Busy pre-send AND no evidence the payload ever reached the pane: the
+      // ordinary 'done' cannot be trusted here. Nothing to retry-Enter into
+      // (the box shows no stuck signature -- that is exactly the ambiguity),
+      // so the only defensible recovery is a defensive resend, same
+      // mechanism as the paste-placeholder path below. Bounded by the same
+      // attempt budget as every other recovery branch.
+      if (attempt >= SUBMIT_RETRY_MAX_ATTEMPTS) {
+        logger.warn(
+          { session, attempt },
+          'sendPromptToSession: busy pre-send, delivery unconfirmed after retries -- proceeding without proof (duplicate-safe downstream)',
+        )
+        break
+      }
+      logger.info({ session, attempt }, 'sendPromptToSession: busy pre-send, done unconfirmed; resending defensively')
+      try {
+        await sendChunks()
+      } catch (err) {
+        logger.warn({ err, session, attempt }, 'Busy-pre-send defensive resend failed')
+        break
+      }
+      continue
+    }
     if (action === 'give-up') {
       logger.warn({ session, attempt }, 'sendPromptToSession: prompt still parked after retries')
       break
@@ -2354,6 +2396,27 @@ export function capturePane(session: string, host: string | null = null): string
     // (a banner otherwise pins detectPaneState 'unknown', blocking scheduler +
     // inter-agent delivery). See stripSessionTitleBanner.
     return stripAllAnsi(stripSessionTitleBanner(captureTmux(host, ['capture-pane', '-t', session, '-e', '-p'])))
+  } catch {
+    return null
+  }
+}
+
+// How many extra scrollback lines to pull for the busy-pre-send confirmation
+// check (BUSYCONFIRM826). Generous enough that a normal 1-2s retry window
+// cannot plausibly scroll a just-typed payload out of range even under a
+// chatty turn, without pulling an unbounded amount of history per check.
+const CONFIRM_SCROLLBACK_LINES = 500
+
+// Same as capturePane, but includes recent scrollback (tmux -S -N) so a
+// substring search can find text that landed but has since scrolled past the
+// live viewport -- used ONLY by the busy-pre-send delivery confirmation
+// check (confirmsDeliveryDespitePriorBusy), never as a general-purpose
+// capture (the extra history is unnecessary cost for every other caller).
+function capturePaneWithScrollback(session: string, host: string | null = null): string | null {
+  try {
+    return stripAllAnsi(stripSessionTitleBanner(captureTmux(
+      host, ['capture-pane', '-t', session, '-e', '-p', '-S', `-${CONFIRM_SCROLLBACK_LINES}`],
+    )))
   } catch {
     return null
   }

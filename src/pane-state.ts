@@ -2075,3 +2075,31 @@ export function paneShowsContextSaturation(capture: string): boolean {
   const footerRegion = lines.slice(-CTX_SAT_FOOTER_REGION_LINES).join('\n')
   return CTX_SAT_RX.test(footerRegion)
 }
+
+// --- Busy-short-circuit confirmation (ea2eb050, 2026-08-26) -----------------
+// decideSubmitFollowup() reads a busy pane at attempt 0 as 'done' -- correct
+// when the pane was IDLE right before we sent (a busy reading afterward can
+// only be our own message starting a turn), but unproven when the pane was
+// ALREADY busy before we typed anything: an unrelated prior turn and "my text
+// landed and started one" look identical from a single snapshot. Reproduced
+// against the real decideSubmitFollowup (see the ea2eb050 investigation): a
+// pane busy with a wholly unrelated turn still yields 'done' on the very
+// first check, with zero evidence the just-sent payload was ever accepted.
+//
+// This does not change decideSubmitFollowup's verdict -- it answers a
+// narrower, separate question the caller asks ONLY when that verdict cannot
+// be trusted on its own: given a wider capture (current view PLUS recent
+// scrollback), is there positive proof the payload actually reached the
+// pane? A 'done' backed by this proof is as good as the ordinary idle-before-
+// send case; a 'done' without it must not be trusted blindly.
+export function confirmsDeliveryDespitePriorBusy(
+  wasBusyPreSend: boolean,
+  paneWithHistory: string | null,
+  payloadHint: string,
+): boolean {
+  // The ordinary path: pane was idle before we sent, so a busy reading
+  // afterward is unambiguous. No extra proof needed.
+  if (!wasBusyPreSend) return true
+  if (paneWithHistory == null || !payloadHint) return false
+  return paneWithHistory.includes(payloadHint)
+}
