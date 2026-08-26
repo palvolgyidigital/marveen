@@ -7,7 +7,7 @@
 // run in exactly that ambiguous case before trusting 'done'.
 
 import { describe, it, expect } from 'vitest'
-import { confirmsDeliveryDespitePriorBusy } from '../pane-state.js'
+import { confirmsDeliveryDespitePriorBusy, hasDedupCoverage } from '../pane-state.js'
 
 const SEP = '─'.repeat(80)
 
@@ -50,5 +50,68 @@ describe('confirmsDeliveryDespitePriorBusy', () => {
     // Defends against a caller accidentally passing an empty hint (e.g. a
     // zero-length oneLine) and getting a free pass via String.includes('').
     expect(confirmsDeliveryDespitePriorBusy(true, BUSY_PANE_UNRELATED_TURN, '')).toBe(false)
+  })
+
+  // WRAP826 (Pedro's review): the fleet's panes are 80 columns wide and
+  // capture-pane is never called with -J, so a landed payload can still have
+  // a newline spliced into the middle of it by terminal line-wrapping. A raw
+  // substring search would then miss text that genuinely arrived -- exactly
+  // in the ambiguous case this function exists to resolve.
+  it('trusts a busy-pre-send verdict when the payload landed but got LINE-WRAPPED across an 80-col pane', () => {
+    // Mirrors agent-process.ts exactly: payloadHint is oneLine.slice(0, 96).
+    const oneLine = 'vesd ossze a rendelesen szereplo arakkal: 15238 -> 1.735 1 db, '
+      + 'es jelezz vissza minel elobb mert David varja a valaszt surgosen ma delutan'
+    const wideHint = oneLine.slice(0, 96)
+    expect(wideHint.length).toBe(96)
+
+    // Simulate a real tmux capture-pane -p (no -J): an 80-column pane wraps
+    // any line longer than 80 chars onto the next terminal row, so a single
+    // logical line becomes multiple array entries with '\n' where the wrap
+    // happened -- splicing a newline into the middle of wideHint itself.
+    const PANE_WIDTH = 80
+    const fullLine = '❯ ' + wideHint
+    const wrappedRows: string[] = []
+    for (let i = 0; i < fullLine.length; i += PANE_WIDTH) {
+      wrappedRows.push(fullLine.slice(i, i + PANE_WIDTH))
+    }
+    const wrappedCapture = wrappedRows.join('\n')
+
+    // Sanity: this fixture genuinely reproduces the bug -- a naive raw
+    // substring search must fail on it, or the test below would be
+    // vacuous (passing regardless of whether the fix works).
+    expect(wrappedRows.length).toBeGreaterThan(1)
+    expect(wrappedCapture.includes(wideHint)).toBe(false)
+
+    // The actual function, despite the wrap, must still confirm delivery.
+    expect(confirmsDeliveryDespitePriorBusy(true, wrappedCapture, wideHint)).toBe(true)
+  })
+
+  it('still correctly rejects when a wrapped capture genuinely does not contain the payload', () => {
+    // The wrap-tolerant comparison must not become "trust anything wrapped":
+    // a busy pane showing unrelated multi-row content still fails.
+    const wideHint = 'a'.repeat(96)
+    const unrelatedWrapped = [BUSY_PANE_UNRELATED_TURN, '(more unrelated scrollback text)'].join('\n')
+    expect(confirmsDeliveryDespitePriorBusy(true, unrelatedWrapped, wideHint)).toBe(false)
+  })
+})
+
+describe('hasDedupCoverage', () => {
+  it('recognises the msg_id marker wrapAgentMessageForDelivery stamps on inter-agent messages', () => {
+    const text = "[Uzenet @pedro-tol -- trusted team member, msg_id:1622]: valami tartalom"
+    expect(hasDedupCoverage(text)).toBe(true)
+  })
+
+  it('returns false for a scheduled-task prompt (no msg_id, not dedup-covered)', () => {
+    const text = '[Utemezett feladat: heti-hirlevel] Az eredmenyt kuldd el Telegramon (chat_id: 8668856531, reply tool).'
+    expect(hasDedupCoverage(text)).toBe(false)
+  })
+
+  it('returns false for a channel-inbound wrap (no msg_id, not dedup-covered)', () => {
+    const text = '<channel source="plugin:telegram:telegram" chat_id="1" message_id="2" ts="2026-08-26T06:00:00.000Z">szia</channel>'
+    expect(hasDedupCoverage(text)).toBe(false)
+  })
+
+  it('does not false-positive on an unrelated numeric token that merely looks similar', () => {
+    expect(hasDedupCoverage('a cikkszam 1622, nem uzenet-azonosito')).toBe(false)
   })
 })
