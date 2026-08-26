@@ -23,7 +23,16 @@ const HOOK = join(ROOT, 'scripts', 'hooks', 'message-dedup-guard.py')
 let DB_DIR = ''
 let DB_PATH = ''
 
-function runHook(prompt: string, cwd = '/install/agents/sam'): string {
+// Real, in-tree cwd paths (under THIS checkout's own agents/ dir), not
+// invented ones: ledger_lib.agent_id_from_cwd() no longer falls back to a
+// bare directory-name guess for an out-of-tree cwd (ee2889c, 2026-08-26) --
+// a fake path like '/install/agents/sam' now resolves to the main agent
+// instead of 'sam', which would make every fixture agent collapse onto the
+// same identity. Using real agents/<name> paths exercises the intended
+// sub-agent resolution branch regardless of that fallback's behaviour.
+const agentCwd = (name: string) => join(ROOT, 'agents', name)
+
+function runHook(prompt: string, cwd = agentCwd('sam')): string {
   return execFileSync('python3', [HOOK], {
     input: JSON.stringify({ prompt, cwd }),
     encoding: 'utf-8',
@@ -62,10 +71,10 @@ describe('message-dedup-guard hook (behavioural)', () => {
   })
 
   it('the SAME msg_id delivered to a DIFFERENT agent is independent (no cross-agent bleed)', () => {
-    runHook(wrapped(1622), '/install/agents/sam')
+    runHook(wrapped(1622), agentCwd('sam'))
     // A fresh agent (max) seeing the same numeric id for the first time must
     // not be told it is a duplicate -- the dedup key is (agent, msg_id).
-    expect(runHook(wrapped(1622), '/install/agents/max').trim()).toBe('')
+    expect(runHook(wrapped(1622), agentCwd('max')).trim()).toBe('')
   })
 
   it('stays silent when the prompt carries no msg_id at all (most turns)', () => {
