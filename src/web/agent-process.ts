@@ -25,6 +25,7 @@ import {
   detectsFeedbackOptOutPrompt,
   firstRunAcceptKeys,
   confirmsDeliveryDespitePriorBusy,
+  hasDedupCoverage,
   type FirstRunGateKind,
 } from '../pane-state.js'
 import { agentDir, listAgentNames, readAgentModel, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentRunAsUser, readAgentMemoryIsolation } from './agent-config.js'
@@ -2241,15 +2242,23 @@ export async function sendPromptToSession(
     runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
   }
 
+  // DEDUPSCOPE826: computed before sendChunks() -- a pure string check, no
+  // I/O -- so the pre-send busy capture just below can be skipped entirely
+  // for payloads the retry loop is not allowed to defensively resend anyway
+  // (see the loop for the full rationale).
+  const dedupCovered = hasDedupCoverage(oneLine)
+
   // BUSYCONFIRM826 (ea2eb050): was the pane ALREADY busy before we typed
   // anything? If so, a busy reading right after we send is NOT proof our
   // message landed -- it could equally be an unrelated prior turn still
   // running, with our text silently vanishing behind it. Captured once here,
   // before sendChunks(), so the retry loop below can tell the two cases
-  // apart. A capture failure defaults to "not provably idle", i.e. treated
-  // as busy -- the safer direction (demands confirmation) when we cannot see.
-  const preSendPane = capturePane(session, host)
-  const preSendBusy = preSendPane == null || detectPaneState(preSendPane) === 'busy'
+  // apart. Only worth capturing when the payload is dedup-covered (see
+  // DEDUPSCOPE826 below) -- otherwise the loop can never act on it anyway.
+  // A capture failure defaults to "not provably idle", i.e. treated as busy
+  // -- the safer direction (demands confirmation) when we cannot see.
+  const preSendPane = dedupCovered ? capturePane(session, host) : null
+  const preSendBusy = dedupCovered && (preSendPane == null || detectPaneState(preSendPane) === 'busy')
 
   await sendChunks()
 
@@ -2272,6 +2281,14 @@ export async function sendPromptToSession(
   //     multi-row verbatim buffer that a plain Enter cannot submit, so a
   //     resend that itself parks is re-cleared and retried until it lands.
   const payloadHint = oneLine.slice(0, Math.min(oneLine.length, 96))
+  // dedupCovered (DEDUPSCOPE826, computed above): an active defensive resend
+  // is only safe when a downstream guard can recognise and no-op a
+  // duplicate -- today that is message-dedup-guard.py, keyed on the
+  // "msg_id:<N>" marker wrapAgentMessageForDelivery stamps on inter-agent
+  // messages. Scheduled-task prompts and channel-inbound text carry no such
+  // marker: for those, an unconfirmed 'done' is left exactly as it behaved
+  // before this fix (trusted, no resend) rather than risking a REAL second
+  // execution with nothing to catch it.
   for (let attempt = 0; ; attempt++) {
     await delay(SUBMIT_RETRY_POLL_MS)
     const pane = capturePane(session, host)
@@ -2282,15 +2299,18 @@ export async function sendPromptToSession(
       // that case. Only when the pane was ALREADY busy pre-send do we demand
       // positive proof (the payload found in a wider, scrollback-inclusive
       // capture) before trusting it.
-      if (confirmsDeliveryDespitePriorBusy(preSendBusy, preSendBusy ? capturePaneWithScrollback(session, host) : null, payloadHint)) {
+      if (!preSendBusy || !dedupCovered) break
+      if (confirmsDeliveryDespitePriorBusy(true, capturePaneWithScrollback(session, host), payloadHint)) {
         break
       }
-      // Busy pre-send AND no evidence the payload ever reached the pane: the
-      // ordinary 'done' cannot be trusted here. Nothing to retry-Enter into
-      // (the box shows no stuck signature -- that is exactly the ambiguity),
-      // so the only defensible recovery is a defensive resend, same
-      // mechanism as the paste-placeholder path below. Bounded by the same
-      // attempt budget as every other recovery branch.
+      // Busy pre-send, dedup-covered, AND no evidence the payload ever
+      // reached the pane: the ordinary 'done' cannot be trusted here.
+      // Nothing to retry-Enter into (the box shows no stuck signature --
+      // that is exactly the ambiguity), so the only defensible recovery is
+      // a defensive resend, same mechanism as the paste-placeholder path
+      // below. Bounded by the same attempt budget as every other recovery
+      // branch, and safe to resend because message-dedup-guard.py will
+      // no-op a second landing on the receiving side.
       if (attempt >= SUBMIT_RETRY_MAX_ATTEMPTS) {
         logger.warn(
           { session, attempt },
