@@ -183,3 +183,92 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
     }
   })
 })
+
+describe('skill-index.sh -- UTF-8-safe truncation (180d2ce0, 2026-08-28)', () => {
+  // Root cause (found by Pedro, 2026-08-28): the description column is
+  // truncated with `cut -c1-120`. Under this environment's coreutils/locale,
+  // cut -c does NOT reliably respect multi-byte character boundaries -- a
+  // description whose 120th character position falls mid-way through a
+  // multi-byte UTF-8 sequence gets an orphaned lead byte with no
+  // continuation byte, leaving the WHOLE INDEX FILE invalid UTF-8. grep then
+  // silently returns zero matches for EVERYTHING in that file -- not just
+  // the corrupted line -- with no error, so every agent searching the index
+  // gets a false "no such skill" for skills that are genuinely there. This
+  // is the exact live incident: szallitoi-arlista-atvezetes's accented
+  // description corrupted the index and Pedro's own newly-added skill
+  // became unfindable.
+  let tmpHome: string
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'skill-index-utf8-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  // A description whose accented character sits exactly where a byte-based
+  // (not character-based) cut at position 120 would split it: 119 plain
+  // ASCII chars, then a 2-byte UTF-8 character (á), then more text. This is
+  // the same shape as the real szallitoi-arlista-atvezetes description that
+  // triggered the live incident.
+  function boundaryStraddlingDescription(): string {
+    return 'a'.repeat(119) + 'á' + 'bcdefgh, tovabbi ekezetes szoveg: arviztűrő tükörfúrógép'
+  }
+
+  it('produces a valid UTF-8 index file even when a description straddles the truncation boundary', () => {
+    mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-boundary'), { recursive: true })
+    writeFileSync(
+      join(tmpHome, '.claude', 'skills', 'skill-boundary', 'SKILL.md'),
+      makeSkillMd('skill-boundary', boundaryStraddlingDescription()),
+    )
+    runScript([], { HOME: tmpHome })
+    const indexPath = join(tmpHome, '.claude', 'skills', '.skill-index.md')
+    const raw = readFileSync(indexPath)
+    // The regression check: decoding as strict UTF-8 must not throw and
+    // must not produce the U+FFFD replacement character an orphaned byte
+    // would decode to.
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw)
+    expect(decoded).not.toContain('�')
+  })
+
+  it('a skill listed AFTER a boundary-straddling description remains findable by grep (the actual failure mode)', () => {
+    // Alphabetically/creation-order first, so its corrupted line lands
+    // earlier in the file than skill-zzz-findable below, closest to how the
+    // live incident actually laid out (the corrupted line was not the last
+    // one in the index).
+    mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-aaa-boundary'), { recursive: true })
+    writeFileSync(
+      join(tmpHome, '.claude', 'skills', 'skill-aaa-boundary', 'SKILL.md'),
+      makeSkillMd('skill-aaa-boundary', boundaryStraddlingDescription()),
+    )
+    mkdirSync(join(tmpHome, '.claude', 'skills', 'skill-zzz-findable'), { recursive: true })
+    writeFileSync(
+      join(tmpHome, '.claude', 'skills', 'skill-zzz-findable', 'SKILL.md'),
+      makeSkillMd('skill-zzz-findable', 'A completely unrelated, later skill that must stay greppable'),
+    )
+    runScript([], { HOME: tmpHome })
+    const indexPath = join(tmpHome, '.claude', 'skills', '.skill-index.md')
+    // Exercise the failure mode with plain `grep` (not a Node string search
+    // -- Node's UTF-8 handling is more forgiving than grep's byte-oriented
+    // text/binary detection). Pedro's live incident was exactly this: grep
+    // returned zero matches for a skill that was genuinely present, once an
+    // earlier line in the same file carried an orphaned byte. Reproducing
+    // it reliably turned out to be locale- and content-shape-sensitive (it
+    // did not reproduce under every LC_ALL setting or fixture layout tried
+    // while writing this test) -- so this assertion is kept as a fixed
+    // contract ("the index must stay fully greppable"), backed by the
+    // unconditional guarantee in the test above (no invalid UTF-8 can ever
+    // reach the file), rather than as a guaranteed red-before-the-fix
+    // reproduction of the exact incident.
+    const found = (() => {
+      try {
+        execSync(`grep -c "skill-zzz-findable" "${indexPath}"`, { encoding: 'utf-8', env: { ...process.env, LC_ALL: 'C' } })
+        return true
+      } catch {
+        return false
+      }
+    })()
+    expect(found).toBe(true)
+  })
+})

@@ -65,7 +65,18 @@ index_skills_dir() {
     fi
 
     local desc
-    desc=$(grep -m1 "^description:" "$skill_md" 2>/dev/null | sed 's/^description: *//' | tr -d '"' | tr -d "'" | cut -c1-120)
+    # 180d2ce0 (2026-08-28): `cut -c1-120` does not reliably respect
+    # multi-byte UTF-8 character boundaries in this environment, so a
+    # description whose 120th character position falls mid-sequence leaves
+    # an orphaned lead byte with no continuation byte -- making the WHOLE
+    # index file invalid UTF-8, not just that one line. grep then silently
+    # returns zero matches for EVERYTHING in the file under some locales
+    # (e.g. LC_ALL=C, as a stripped-down hook/cron environment commonly
+    # runs), so every agent searching the index gets a false "no such
+    # skill", with no error anywhere. `iconv -c` drops any invalid byte
+    # sequence the cut may have produced, guaranteeing valid UTF-8 output
+    # regardless of where the truncation boundary landed.
+    desc=$(grep -m1 "^description:" "$skill_md" 2>/dev/null | sed 's/^description: *//' | tr -d '"' | tr -d "'" | cut -c1-120 | iconv -f utf-8 -t utf-8 -c)
     if [ -z "$desc" ]; then
       desc="(nincs leírás)"
     fi
