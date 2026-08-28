@@ -186,17 +186,25 @@ describe('skill-index.sh -- graceful handling of missing global dir', () => {
 
 describe('skill-index.sh -- UTF-8-safe truncation (180d2ce0, 2026-08-28)', () => {
   // Root cause (found by Pedro, 2026-08-28): the description column is
-  // truncated with `cut -c1-120`. Under this environment's coreutils/locale,
-  // cut -c does NOT reliably respect multi-byte character boundaries -- a
-  // description whose 120th character position falls mid-way through a
-  // multi-byte UTF-8 sequence gets an orphaned lead byte with no
-  // continuation byte, leaving the WHOLE INDEX FILE invalid UTF-8. grep then
-  // silently returns zero matches for EVERYTHING in that file -- not just
-  // the corrupted line -- with no error, so every agent searching the index
-  // gets a false "no such skill" for skills that are genuinely there. This
-  // is the exact live incident: szallitoi-arlista-atvezetes's accented
-  // description corrupted the index and Pedro's own newly-added skill
-  // became unfindable.
+  // truncated with `cut -c1-120`. In this environment cut -c does NOT
+  // reliably respect multi-byte character boundaries -- a description whose
+  // 120th character position falls mid-way through a multi-byte UTF-8
+  // sequence gets an orphaned lead byte with no continuation byte, leaving
+  // the WHOLE INDEX FILE invalid UTF-8.
+  //
+  // Confirmed mechanism for why that then makes skills unfindable (Pedro,
+  // measured directly, corrected an earlier locale-based guess): it is NOT
+  // about locale -- plain `/bin/grep` (GNU grep) reads the corrupted file
+  // fine either way. The actual failure is that an agent's interactive Bash
+  // tool runs `grep` through a Claude Code shell function that execs the
+  // `claude` binary as `ugrep` with `-I` (skip binary files). ugrep
+  // classifies the file as binary the moment it hits the orphaned byte and
+  // -I then skips the WHOLE file silently -- including lines BEFORE the
+  // corruption, not just after. A plain, non-interactive grep call (a hook,
+  // a script, this test's subprocess) never goes through that wrapper and
+  // is not affected. This is the exact live incident: szallitoi-arlista-
+  // atvezetes's accented description corrupted the index and Pedro's own
+  // newly-added skill became unfindable, from HIS interactive session.
   let tmpHome: string
 
   beforeEach(() => {
@@ -232,7 +240,7 @@ describe('skill-index.sh -- UTF-8-safe truncation (180d2ce0, 2026-08-28)', () =>
     expect(decoded).not.toContain('�')
   })
 
-  it('a skill listed AFTER a boundary-straddling description remains findable by grep (the actual failure mode)', () => {
+  it('a skill listed AFTER a boundary-straddling description remains findable by grep (baseline sanity, not the ugrep incident itself)', () => {
     // Alphabetically/creation-order first, so its corrupted line lands
     // earlier in the file than skill-zzz-findable below, closest to how the
     // live incident actually laid out (the corrupted line was not the last
@@ -249,21 +257,21 @@ describe('skill-index.sh -- UTF-8-safe truncation (180d2ce0, 2026-08-28)', () =>
     )
     runScript([], { HOME: tmpHome })
     const indexPath = join(tmpHome, '.claude', 'skills', '.skill-index.md')
-    // Exercise the failure mode with plain `grep` (not a Node string search
-    // -- Node's UTF-8 handling is more forgiving than grep's byte-oriented
-    // text/binary detection). Pedro's live incident was exactly this: grep
-    // returned zero matches for a skill that was genuinely present, once an
-    // earlier line in the same file carried an orphaned byte. Reproducing
-    // it reliably turned out to be locale- and content-shape-sensitive (it
-    // did not reproduce under every LC_ALL setting or fixture layout tried
-    // while writing this test) -- so this assertion is kept as a fixed
-    // contract ("the index must stay fully greppable"), backed by the
-    // unconditional guarantee in the test above (no invalid UTF-8 can ever
-    // reach the file), rather than as a guaranteed red-before-the-fix
-    // reproduction of the exact incident.
+    // This runs plain GNU grep as a subprocess (a Node execSync child, not
+    // an interactive bash session), which per the mechanism above is NOT
+    // the path that ever went blind -- the ugrep -I wrapper only exists
+    // inside an agent's own interactive Bash-tool shell function, which a
+    // subprocess test harness does not go through and should not try to
+    // fake (that would mean depending on the `claude` binary being present
+    // and behaving identically in CI, which is out of scope for a unit
+    // test). So this assertion does not reproduce the incident itself --
+    // it pins a baseline contract ("plain grep must still find a valid,
+    // later line"), backed by the unconditional guarantee in the test
+    // above that no invalid UTF-8 can reach the file at all, which is what
+    // actually prevents the ugrep -I incident from recurring.
     const found = (() => {
       try {
-        execSync(`grep -c "skill-zzz-findable" "${indexPath}"`, { encoding: 'utf-8', env: { ...process.env, LC_ALL: 'C' } })
+        execSync(`grep -c "skill-zzz-findable" "${indexPath}"`, { encoding: 'utf-8' })
         return true
       } catch {
         return false
