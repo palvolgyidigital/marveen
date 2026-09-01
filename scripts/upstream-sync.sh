@@ -27,11 +27,35 @@ if [ "$NEW" -eq 0 ]; then
   exit 0
 fi
 
+# HEARTBEAT.md-t a fo agens irja at minden heartbeat tick-nel (self-modifying,
+# lasd update-preflight.ts). A fenti dirty-ellenorzes ezert kihagyja -- DE a
+# git rebase (szemben a sima git pull --ff-only-lyal, amit az update.sh hasznal
+# ugyanerre a fajlra) NEM turi a piszkos indexet, es ha a fajl eppen STAGED
+# modositott allapotban van a script inditasakor, ez pontosan a "cannot
+# rebase: Your index contains uncommitted changes" hibat adja (mert
+# 2026-09-01, scratch-fan reprodukalva, byte-ra egyezo uzenettel). A rebase
+# elott felretesszuk, utana visszatesszuk -- ha a visszatetel utkozik,
+# eldobjuk: adatvesztes nem szamit, a fajlt ugyis felulirja a legkozelebbi
+# heartbeat tick.
+HEARTBEAT_STASHED=0
+if [ -n "$(git status --porcelain --untracked-files=no -- HEARTBEAT.md)" ]; then
+  git stash push -- HEARTBEAT.md >/dev/null 2>&1 && HEARTBEAT_STASHED=1
+fi
+restore_heartbeat() {
+  [ "$HEARTBEAT_STASHED" -eq 1 ] || return 0
+  if ! git stash pop >/dev/null 2>&1; then
+    git stash drop >/dev/null 2>&1
+    echo "UPSTREAM-SYNC: FIGYELEM -- a HEARTBEAT.md ideiglenes stash-e utkozott visszaallitaskor, eldobva (a fajlt ugyis felulirja a kovetkezo heartbeat tick)."
+  fi
+}
+
 echo "UPSTREAM-SYNC: $NEW uj upstream commit, rebase indul."
 if ! git rebase upstream/develop >/tmp/upstream-sync-rebase.log 2>&1; then
   git rebase --abort 2>/dev/null
+  restore_heartbeat
   fail "REBASE UTKOZES $NEW commitnal. A develop valtozatlan ($BEFORE). Kezi feloldas kell. Reszletek: /tmp/upstream-sync-rebase.log"
 fi
+restore_heartbeat
 
 if ! npm run build >/tmp/upstream-sync-build.log 2>&1; then
   git reset --hard "$BEFORE" >/dev/null 2>&1
