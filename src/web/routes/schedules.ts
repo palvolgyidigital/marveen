@@ -232,7 +232,19 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
     if (!existsSync(dir)) { json(res, { error: 'Schedule not found' }, 404); return true }
     const result = await runScheduledTaskNow(name)
     if (!result.ok) { json(res, { error: result.error }, 400); return true }
-    logger.info({ name, result: result.result }, 'Scheduled task run-now fired')
+    // Caller identity for the audit trail: the endpoint accepts any valid
+    // dashboard bearer token (shared across every agent, no per-agent
+    // scoping), so ctx.auth alone never distinguishes who fired this. Remote
+    // address + User-Agent are the only signal available post-hoc when the
+    // question "who ran this" comes up later and the requester is unknown
+    // (measured 2026-09-01: unanswerable from the log as it stood before).
+    logger.info({
+      name,
+      result: result.result,
+      remote: req.socket?.remoteAddress ?? 'unknown',
+      xff: req.headers['x-forwarded-for'] ?? '',
+      userAgent: req.headers['user-agent'] ?? '',
+    }, 'Scheduled task run-now fired')
     json(res, { ok: true, result: result.result })
     return true
   }
