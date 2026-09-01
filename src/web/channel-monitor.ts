@@ -2547,7 +2547,7 @@ function checkMainKeepaliveStaleness(): void {
 }
 
 export function sendAlert(text: string, meta?: AlertMeta): void {
-  notifyChannel(text, meta).catch(() => {})
+  notifyChannel(text, meta).catch((err) => logger.warn({ err }, 'sendAlert: notifyChannel rejected'))
 }
 
 // GAVEUPRELOAD1033: the give-up stage's last /reload-plugins, only into a main
