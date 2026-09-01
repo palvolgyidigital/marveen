@@ -65,7 +65,11 @@ index_skills_dir() {
     fi
 
     local desc
-    desc=$(grep -m1 "^description:" "$skill_md" 2>/dev/null | sed 's/^description: *//' | tr -d '"' | tr -d "'" | cut -c1-120)
+    # FIGYELEM: a `cut -c` itt BAJT-alapu (uutils coreutils), nem karakter-alapu, ezert
+    # elvaghat egy tobbbajtos UTF-8 karaktert a 120. bajtnal. Egyetlen ilyen csonka bajt
+    # BINARISNAK minositi az EGESZ indexet a grep szamara, hibauzenet nelkul -- vagyis a
+    # skill-kereses nemam nulla talalatot ad. Az iconv -c eldobja a csonka sorozatot.
+    desc=$(grep -m1 "^description:" "$skill_md" 2>/dev/null | sed 's/^description: *//' | tr -d '"' | tr -d "'" | cut -c1-120 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null)
     if [ -z "$desc" ]; then
       desc="(nincs leírás)"
     fi
