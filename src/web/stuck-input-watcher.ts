@@ -1,5 +1,7 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { logger } from '../logger.js'
-import { MAIN_AGENT_ID } from '../config.js'
+import { MAIN_AGENT_ID, STORE_DIR } from '../config.js'
 import { listAgentNames, readAgentRemoteHost } from './agent-config.js'
 import { isAgentRunning, captureParkedInputView, sendEnterToSession, capturePane } from './agent-process.js'
 import { resolveAgentSession } from './channel-mcp-reconnect.js'
@@ -204,6 +206,25 @@ function bareEnterRecovery(label: string, session: string, host: string | null):
   }
 }
 
+// Diagnostic-only: dump the pane capture already taken for the give-up alert
+// to disk, raw and untouched. Purely observational -- writes a file, changes
+// nothing about recovery or the alert itself. Exists because the "why did
+// this not match the recognizer" question (2026-09-01, Max/mm-keszletriport-
+// napi) is currently only answerable by re-deriving what the pane looked like
+// from static code reading; the next occurrence should leave real evidence
+// instead. If a give-up alert never fires, this never runs and nothing is
+// written -- zero cost on the common path.
+function dumpStuckPaneCapture(session: string, pane: string): void {
+  try {
+    const dir = join(STORE_DIR, 'stuck-input-captures')
+    mkdirSync(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    writeFileSync(join(dir, `${session}-${stamp}.txt`), pane)
+  } catch (err) {
+    logger.warn({ err, session }, 'stuck-input-watcher: failed to write diagnostic pane capture')
+  }
+}
+
 // LOCAL session: full robust escalation (Enter -> clear + re-inject) on the
 // fast tick. Used for the MAIN channels session AND local sub-agents -- both
 // are local tmux, so the clear+re-inject applies. This drops the
@@ -252,6 +273,7 @@ async function checkLocalSession(label: string, session: string, alertOnGiveUp: 
       })) {
         alertedSpells.add(session)
         logger.warn({ label, session, paneState }, 'stuck-input-watcher: sub-agent input still parked after max recovery attempts at a non-busy pane, alerting for manual restart')
+        if (pane != null) dumpStuckPaneCapture(session, pane)
         sendAlert(`⚠️ A(z) ${label} agens bemenete beragadt és az auto-recovery (Enter + clear/re-inject) nem szabadította ki. Valószínűleg kézi restart kell: POST /api/agents/${label}/restart vagy a dashboardon.`)
       } else if (paneState === 'busy' && prev.attempts < LOCAL_FAST_THRESHOLDS.maxAttempts) {
         // Once per spell, at the crossing tick: say WHY no alert went out, so
