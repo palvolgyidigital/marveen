@@ -170,7 +170,7 @@ TOKEN_FILE="$PROD_ROOT/store/.dashboard-token"
 # from a scratch root is word-for-word identical to a real one, and the
 # reader starts an investigation (cost one wasted round on 2026-08-22).
 ORIGIN="${MARVEEN_DASHBOARD_ORIGIN:-http://localhost:3420}"
-ALERT_TO="${MARVEEN_GUARD_ALERT_TO:-marveen}"
+ALERT_TO="${MARVEEN_GUARD_ALERT_TO:-pedro}"
 # Honest delivery (NOTIFYVAKSWEEP826): the alert POST used to be fire-and-
 # forget -- a failed send left the branch-switch alert lost with no trace.
 # The hook stays exit-0 (a guard must not break git), but a delivery failure
@@ -191,7 +191,7 @@ ALERT_TEXT="[PROD-FA ORSEG, post-checkout hook] Fa: $TOPLEVEL -- agat valtott a(
 GUARD_BODY=""
 if command -v python3 >/dev/null 2>&1; then
   GUARD_BODY="$(GUARD_TO="$ALERT_TO" GUARD_TEXT="$ALERT_TEXT" python3 -c 'import json,os,sys
-sys.stdout.write(json.dumps({"from":"marveen","to":os.environ["GUARD_TO"],"content":os.environ["GUARD_TEXT"]}))' 2>/dev/null)" || GUARD_BODY=""
+sys.stdout.write(json.dumps({"from":"pedro","to":os.environ["GUARD_TO"],"content":os.environ["GUARD_TEXT"]}))' 2>/dev/null)" || GUARD_BODY=""
 fi
 if [ -z "$GUARD_BODY" ]; then
   # No encoder, no send: a body the shell glued together is exactly what this
