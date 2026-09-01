@@ -30,10 +30,18 @@ export async function notifyChannel(text: string): Promise<void> {
     try {
       const parseMode = CHANNEL_PROVIDER === 'telegram' ? 'HTML' : undefined
       await provider.sendMessage(CHANNEL_TOKEN, chatId, chunk, parseMode)
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, 'notifyChannel: primary send failed, trying the unformatted fallback')
       try {
         await provider.sendMessage(CHANNEL_TOKEN, chatId, outbound.slice(0, 4096))
-      } catch { /* last resort, give up */ }
+      } catch (err2) {
+        // Last resort: both sends failed and this text is gone. Measured
+        // 2026-09-01: a stuck-input owner alert vanished here with no trace
+        // anywhere, because this catch was empty -- log-only, no behavior
+        // or retry-logic change. (Merge 2026-09-07: az upstream idokozben
+        // parameteres chatId-re valtott, azt vettuk at; a naplozas a mienk.)
+        logger.warn({ err: err2 }, 'notifyChannel: fallback send also failed, message not delivered')
+      }
     }
   }
 }
