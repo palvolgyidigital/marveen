@@ -2407,7 +2407,7 @@ function checkMainKeepaliveStaleness(): void {
 }
 
 export function sendAlert(text: string, meta?: AlertMeta): void {
-  notifyChannel(text, meta).catch(() => {})
+  notifyChannel(text, meta).catch((err) => logger.warn({ err }, 'sendAlert: notifyChannel rejected'))
 }
 
 async function handleMarveenDown(): Promise<void> {
