@@ -50,7 +50,20 @@ restore_heartbeat() {
 }
 
 echo "UPSTREAM-SYNC: $NEW uj upstream commit, rebase indul."
-if ! git rebase upstream/develop >/tmp/upstream-sync-rebase.log 2>&1; then
+# MARVEEN_PROD_CHECKOUT_OK=1: a prod-tree-guard post-checkout hookja (2026-08-22
+# ota el) minden agvaltast figyel, es levalasztott HEAD-en (git rev-parse
+# --abbrev-ref HEAD == "HEAD", nem esik a develop|main|master case-orzobe)
+# AUTOMATIKUSAN visszacsekkoutol developra. A git rebase belsoleg detached
+# HEAD-re valt (checkout upstream/develop), a hook ezt szandekolatlan
+# agvaltasnak nezi es kozbeszol -- MIKOZBEN a rebase indexe meg az
+# upstream/develop-et varja, ebbol jott a "cannot rebase: Your index
+# contains uncommitted changes" hiba. Mert 2026-09-02, reflog: 91f276e
+# rebase(start)->2c61aee checkout(develop)->2c61aee rebase(abort), mind
+# ugyanabban a masodpercben, plusz a hook sajat riasztasa (agent_messages
+# 2538) szo szerint megerositi. A MARVEEN_PROD_CHECKOUT_OK=1 a hook sajat,
+# szandekolt kijarata erre az esetre -- csak erre az egy hivasra korlatozva,
+# nem a teljes szkriptre. Marci jovahagyta 2026-09-02.
+if ! MARVEEN_PROD_CHECKOUT_OK=1 git rebase upstream/develop >/tmp/upstream-sync-rebase.log 2>&1; then
   git rebase --abort 2>/dev/null
   restore_heartbeat
   fail "REBASE UTKOZES $NEW commitnal. A develop valtozatlan ($BEFORE). Kezi feloldas kell. Reszletek: /tmp/upstream-sync-rebase.log"
