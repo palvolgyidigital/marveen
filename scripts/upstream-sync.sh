@@ -9,6 +9,17 @@
 # Biztonsag: ha a rebase utkozik, MEGALL es NEM tol fel semmit -- a develop
 # valtozatlan marad, az ejszakai update tovabbra is a jelenlegi (mukodo)
 # allapotot huzza. Az utkozest embernek kell feloldania.
+#
+# GIT RERERE (2026-09-02, kartya 82068a49): a repo-szintu .git/config-ban
+# `rerere.enabled = true` van bekapcsolva (elotte nem volt beallitva sehol).
+# Ez NEM automatizalja a rebase-t: a git rebase minden utkozesnel megall,
+# rerere nélkül is, rerere-vel is -- csak azt teszi, hogy ha egy MAR EGYSZER
+# kezzel feloldott utkozes-mintazat ujra elojon, a tartalmat automatikusan
+# kitolti (nem hivja meg a git add-et vagy a --continue-t maganak). A
+# .git/rr-cache alatt egy bejegyzes van (a src/web/agent-process.ts
+# c21acf4-es utkozesenek feloldasa, unios minta, ugyanaz mint a tobbi mai
+# ehhez hasonlo ütkozes). Visszavonas egy paranccsal: git config --unset
+# rerere.enabled (a cache-bejegyzes ekkor is megmarad, de nem hasznalodik).
 set -u
 cd /home/pdb/marveen || exit 1
 export GIT_SSH_COMMAND="ssh -i /home/pdb/.ssh/id_ed25519_marveen -o IdentitiesOnly=yes"
