@@ -2385,10 +2385,29 @@ export async function sendPromptToSession(
 }
 
 // How long to wait between the two capture samples when the first one
-// looks idle. The Claude Code UI renders the "idle footer without `esc
-// to interrupt`" line for ~1 frame after a turn submits before the
-// spinner lands; a quarter-second settle window is well past that.
-const PANE_READY_CONFIRM_DELAY_MS = 250
+// looks idle. Originally sized only for the submit-moment race: the
+// Claude Code UI renders the "idle footer without `esc to interrupt`"
+// line for ~1 frame after a turn submits before the spinner lands, and
+// 250ms is well past that single frame.
+//
+// SESSREADY902 (2026-09-02, Anna/mm-keszletriport-family): that was not
+// the only gap. Measured live on a session mid-turn, sampling every 3s
+// for 45s (content genuinely changing every sample, so provably busy the
+// whole time): the footer's own rotating hint segment omitted "esc to
+// interrupt" in 2 of 15 samples, even though nothing else about the
+// session's state changed. None of the 15 samples showed two consecutive
+// misses, so whatever this window is, it is shorter than 3s -- but 250ms
+// is not comfortably clear of it. A router tick that captured BOTH
+// isSessionReadyForPrompt reads inside that window would see "idle"
+// twice and inject a prompt into a session that is, in fact, still
+// working -- the parked/truncated-input failure class this session
+// investigated most of the day. Raised to 2s: an order of magnitude past
+// the old value, still comfortably under the measured "never twice at 3s
+// apart" bound, and small next to the minutes-long stalls it replaces.
+// Cost: an idle session now waits up to ~1.75s longer for its confirm
+// capture before a message is delivered -- the busy path is unaffected,
+// it already returns before this delay is ever reached.
+const PANE_READY_CONFIRM_DELAY_MS = 2000
 
 // Send a bare Enter to a session. Used by the stuck-input watcher to
 // re-submit a prompt whose trailing Enter was swallowed on the channel-
