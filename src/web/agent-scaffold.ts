@@ -18,6 +18,7 @@ import { resolveAgentSecurityProfile, readAgentTeam } from './agent-team.js'
 import { sanitizeCapabilityTag, CAPABILITY_TAG_MAX_PER_AGENT } from '../prompt-safety.js'
 import { TMP_ROOT_PREFIXES as _TMP_PREFIXES } from './tmp-root-prefixes.js'
 import { EXTRA_HOOKS_FILE, applyExtraHookEntries, extraHooksDigest, loadExtraHookEntries, type ExtraHookDeps } from './extra-hook-entries.js'
+import { makeLazyBinResolver } from '../platform.js'
 
 // Resolve the base URL agents should use to reach the dashboard API.
 //
@@ -120,8 +121,25 @@ export function resolveHookNodeBin(
 
 export const HOOK_NODE_BIN = resolveHookNodeBin(process.execPath)
 
+// python3 has no analogue to process.execPath -- it is a separate interpreter,
+// not the runtime executing this server, so there is no self-referential
+// absolute path to reach for. Resolved lazily instead (see makeLazyBinResolver
+// in platform.ts): a transient PATH gap at boot does not throw, and a moved
+// binary self-heals on next use, the same protection this file already gives
+// tmux/claude elsewhere. Module-level so every hookCommand() call for a .py
+// script shares one cache.
+const pythonBin = makeLazyBinResolver('python3')
+
+// The interpreter for a hook script, chosen by extension: .py scripts need
+// python3, everything else (.mjs/.js) runs under node. Extracted so the
+// choice is made in exactly one place -- see hookCommand() below for how this
+// bug looked when it was extension-blind (2026-09-03).
+function interpreterFor(scriptPath: string): string {
+  return scriptPath.endsWith('.py') ? pythonBin() : HOOK_NODE_BIN
+}
+
 // The ONE way a gate hook command is assembled. Both halves are quoted:
-// process.execPath with a space in it (native Windows `C:\Program Files`, a
+// an interpreter path with a space in it (native Windows `C:\Program Files`, a
 // home directory with a space) would otherwise be split by `sh -c` at the
 // space -- exit 127, silently non-enforcing, the exact failure this file
 // exists to close. A single builder also keeps the injectors and every
@@ -141,14 +159,28 @@ export function hookCommand(scriptPath: string, args: readonly string[] = [], ho
   // stable path outside the launchd PATH, which is the original defect. Making
   // the failure loud is install-manager agnostic and covers any future move.
   //
+  // Before interpreterFor() existed this always used HOOK_NODE_BIN, extension-
+  // blind: a .py hook (cimzett-gate.py, tudastagadas-gate.py) got node as its
+  // interpreter, node raised ERR_UNKNOWN_FILE_EXTENSION and exited 1 -- a
+  // NON-blocking status, so PreToolUse let the tool call through. The gate
+  // looked wired (present in settings.json, script on disk, matcher correct)
+  // and enforced nothing; the only trace was an unread stderr line. Measured
+  // 2026-09-03: same payload, node exit 1 vs python3 exit 2.
+  //
   // The message says the three things an operator needs: WHAT is missing, that
   // this is why the call is blocked (so a wall of blocked tools is not read as
   // some other breakage), and the way out -- restarting the dashboard reruns
   // the ensure* migrations, which rewrite the path. A blocking gate with no
   // stated way out is worse than a loud error.
+<<<<<<< HEAD
   const miss = `governance-kapu: a hook interpretere nem talalhato (${HOOK_NODE_BIN}). A kapu ezert BLOKKOL. Javitas: inditsd ujra a dashboardot, az ujrairja a hook-utakat.`
   const invocation = gateInvocation(`"${HOOK_NODE_BIN}"`, scriptPath, args)
   return `test -x "${HOOK_NODE_BIN}" || { echo "${miss}" >&2; exit 2; }; ${failClosedGateRun(invocation, basename(scriptPath), hookTimeoutSec)}`
+=======
+  const bin = interpreterFor(scriptPath)
+  const miss = `governance-kapu: a hook interpretere nem talalhato (${bin}). A kapu ezert BLOKKOL. Javitas: inditsd ujra a dashboardot, az ujrairja a hook-utakat.`
+  return `test -x "${bin}" || { echo "${miss}" >&2; exit 2; }; "${bin}" "${scriptPath}"`
+>>>>>>> 520d1e6f (fix(agent-scaffold): hookCommand() picks python3 for .py hooks, not node)
 }
 
 // The python twin of hookCommand(). The outgoing-copy-gate is a .py script, so
