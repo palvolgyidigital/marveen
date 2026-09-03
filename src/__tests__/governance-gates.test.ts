@@ -4,6 +4,8 @@ import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMess
 import {
   agentGetsGovernanceGates,
   injectSelfPaceGate,
+  injectCimzettGate,
+  injectTudastagadasGate,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
 
@@ -306,6 +308,77 @@ describe('governance gate scaffold wiring', () => {
     // operator-confirmation-gate is intentionally NOT wired: merge/deploy is
     // operator-authorized autonomously; the self-decide vector is covered above.
     expect(pre.some((e) => JSON.stringify(e).includes('operator-confirmation-gate.mjs'))).toBe(false)
+  })
+})
+
+// --- cimzett-gate: blocks an outgoing Telegram reply whose text salutes a
+// person DIFFERENT from the chat_id it is going to (2026-08-31 misdirection
+// incident). Fleet-wide -- NOT exempt for the main agent, unlike email/self-pace.
+describe('cimzett-gate scaffold wiring', () => {
+  it('injectCimzettGate is idempotent (no duplicate on respawn)', () => {
+    const s: Record<string, unknown> = {}
+    injectCimzettGate(s)
+    injectCimzettGate(s)
+    const pre = ((s.hooks as Record<string, unknown>).PreToolUse as unknown[])
+    expect(pre.filter((e) => JSON.stringify(e).includes('cimzett-gate.py')).length).toBe(1)
+  })
+  it('matcher fires on the Telegram reply tool only, not on Bash or Read', () => {
+    const s: Record<string, unknown> = {}
+    injectCimzettGate(s)
+    const pre = ((s.hooks as Record<string, unknown>).PreToolUse as Array<{ matcher: string }>)
+    const entry = pre.find((e) => JSON.stringify(e).includes('cimzett-gate.py'))
+    const re = new RegExp(`^(?:${entry!.matcher})$`)
+    expect(re.test('mcp__plugin_telegram_telegram__reply')).toBe(true)
+    expect(re.test('Bash')).toBe(false)
+    expect(re.test('Read')).toBe(false)
+  })
+  it('is not gated by agentGetsGovernanceGates/agentGetsEmailGate -- applies unconditionally, main agent included', () => {
+    // Unlike email-send-gate / self-pace-gate, writeAgentSettingsFromProfile calls
+    // injectCimzettGate() with no `if (agentGetsXGate(name))` guard: every agent
+    // with a Telegram channel, including MAIN_AGENT_ID, can misaddress a reply.
+    const main: Record<string, unknown> = {}
+    const sub: Record<string, unknown> = {}
+    injectCimzettGate(main)
+    injectCimzettGate(sub)
+    const wired = (s: Record<string, unknown>) =>
+      ((s.hooks as Record<string, unknown>).PreToolUse as unknown[])
+        .some((e) => JSON.stringify(e).includes('cimzett-gate.py'))
+    expect(wired(main)).toBe(true)
+    expect(wired(sub)).toBe(true)
+  })
+})
+
+// --- tudastagadas-gate: blocks an outgoing Telegram reply that asserts an
+// absence of knowledge when the fleet's own notes already answer it
+// (GitHub-token incident, 2026-09-02). Fleet-wide, same as cimzett-gate.
+describe('tudastagadas-gate scaffold wiring', () => {
+  it('injectTudastagadasGate is idempotent (no duplicate on respawn)', () => {
+    const s: Record<string, unknown> = {}
+    injectTudastagadasGate(s)
+    injectTudastagadasGate(s)
+    const pre = ((s.hooks as Record<string, unknown>).PreToolUse as unknown[])
+    expect(pre.filter((e) => JSON.stringify(e).includes('tudastagadas-gate.py')).length).toBe(1)
+  })
+  it('matcher fires on the Telegram reply tool only, not on Bash or Read', () => {
+    const s: Record<string, unknown> = {}
+    injectTudastagadasGate(s)
+    const pre = ((s.hooks as Record<string, unknown>).PreToolUse as Array<{ matcher: string }>)
+    const entry = pre.find((e) => JSON.stringify(e).includes('tudastagadas-gate.py'))
+    const re = new RegExp(`^(?:${entry!.matcher})$`)
+    expect(re.test('mcp__plugin_telegram_telegram__reply')).toBe(true)
+    expect(re.test('Bash')).toBe(false)
+    expect(re.test('Read')).toBe(false)
+  })
+  it('applies unconditionally, main agent included', () => {
+    const main: Record<string, unknown> = {}
+    const sub: Record<string, unknown> = {}
+    injectTudastagadasGate(main)
+    injectTudastagadasGate(sub)
+    const wired = (s: Record<string, unknown>) =>
+      ((s.hooks as Record<string, unknown>).PreToolUse as unknown[])
+        .some((e) => JSON.stringify(e).includes('tudastagadas-gate.py'))
+    expect(wired(main)).toBe(true)
+    expect(wired(sub)).toBe(true)
   })
 })
 

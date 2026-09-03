@@ -509,11 +509,18 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   // through the main agent. (b) self-pace block -- no ScheduleWakeup/Cron*/Bash
   // self-injection. (c) egress gate -- WebFetch calls that are not on the known
   // API allowlist are hard-blocked and logged; arbitrary web content must go
-  // through the quarantine-reader sub-agent. The MAIN_AGENT_ID is exempt from
-  // (a) and (b) but NOT from (c) -- every agent can be hijacked via an injected
-  // WebFetch call, including the main one. Merge/deploy is NOT gated: the operator
-  // authorizes those autonomously (so test/deploy runs are never blocked); the
-  // actual incident vector -- an agent answering its OWN posed question -- is
+  // through the quarantine-reader sub-agent. (d) cimzett-gate -- an outgoing
+  // Telegram reply whose text salutes a DIFFERENT person than the chat_id it is
+  // going to is blocked (misdirection incident, 2026-08-31). (e) tudastagadas-
+  // gate -- an outgoing Telegram reply that asserts an absence of knowledge is
+  // blocked if the fleet's own notes already answer it (the GitHub-token
+  // incident, 2026-09-02). The MAIN_AGENT_ID is exempt from (a) and (b) but NOT
+  // from (c), (d) or (e) -- every agent can be hijacked via an injected
+  // WebFetch call, every agent with its own Telegram channel can misaddress a
+  // reply the same way the main one did, and every agent can assert a false
+  // absence the same way. Merge/deploy is NOT gated: the operator authorizes
+  // those autonomously (so test/deploy runs are never blocked); the actual
+  // incident vector -- an agent answering its OWN posed question -- is
   // covered by the self-pace block + the #0 CLAUDE.md doctrine.
   if (agentGetsEmailGate(name)) injectEmailSendGate(existing)
   if (agentGetsGovernanceGates(name)) injectSelfPaceGate(existing)
@@ -522,6 +529,8 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
     injectDigestProvenanceGate(existing)
   }
   injectEgressGate(existing)
+  injectCimzettGate(existing)
+  injectTudastagadasGate(existing)
   atomicWriteFileSync(settingsPath, JSON.stringify(existing, null, 2))
 }
 
@@ -720,6 +729,109 @@ export function ensureEgressGate(name: string): boolean {
   if (ptuJson.includes('egress-gate.mjs') && hookCommandWired(ptuJson, command)) return false
   if (isUnsafeHookCommand(command)) return false
   injectEgressGate(settings)
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
+// Idempotently wire the cimzett-gate PreToolUse hook (blocks an outgoing
+// Telegram reply whose text salutes a person DIFFERENT from the chat_id the
+// reply is going to -- e.g. "Szia Zoli" landing on Abel's channel, the
+// 2026-08-31 misdirection incident). Applied to ALL agents including
+// MAIN_AGENT_ID: any agent with its own Telegram channel can misaddress a
+// reply the same way, not just the main one. Same dedupe shape as the other
+// gate injectors. The detection logic and the chat_id -> owner map live in
+// scripts/megszolitas-cimzett-ellenor.py; this hook only wires it in and adds
+// the one-shot, time-limited `--override` escape hatch for legitimate
+// forwarding/quoting of someone else's text.
+export function injectCimzettGate(existing: Record<string, unknown>): void {
+  const hooks = (existing.hooks && typeof existing.hooks === 'object'
+    ? existing.hooks
+    : (existing.hooks = {})) as Record<string, unknown>
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'cimzett-gate.py'))
+  // Registration guard: a /tmp or missing path must never enter shared settings.
+  if (isUnsafeHookCommand(command)) return
+  const entry = {
+    matcher: 'mcp__plugin_telegram_telegram__reply',
+    hooks: [{ type: 'command', command, timeout: 10 }],
+  }
+  const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
+  hooks.PreToolUse = [
+    ...prev.filter((e) => !JSON.stringify(e).includes('cimzett-gate.py')),
+    entry,
+  ]
+}
+
+// Idempotent migration: ensure every agent's settings.json carries the
+// cimzett-gate hook, same startup-migration shape as ensureEgressGate (so an
+// already-running agent gets it without a full respawn).
+export function ensureCimzettGate(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'cimzett-gate.py'))
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  const ptuJson = JSON.stringify(ptu)
+  if (ptuJson.includes('cimzett-gate.py') && hookCommandWired(ptuJson, command)) return false
+  if (isUnsafeHookCommand(command)) return false
+  injectCimzettGate(settings)
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
+// Idempotently wire the tudastagadas-gate PreToolUse hook (blocks an outgoing
+// Telegram reply that ASSERTS an absence of knowledge -- "nincs bejelentkezve",
+// "nem tudom", "nem talaltam" -- when the fleet's own memory/skill/kanban notes
+// already answer it. The motivating incident, 2026-09-02: Pedro told Marci
+// there was no GitHub token, when the git-push-identity-and-auth skill names
+// exactly where it lives. Validated against Pedro's own outgoing log (Bob,
+// 2026-09-02) before being wired: a wider trigger ("negation OR question mark")
+// fired on ~31% of all traffic -- unusable noise, driven almost entirely by the
+// question-mark leg (Pedro's own messages end in a question 26% of the time as
+// a matter of style, not error). The negation-only trigger, WITH the search
+// restricted to specific/proper-noun-like keywords (see SOLO_BLACKLIST in the
+// hook itself) and a same-topic AND-search, blocks 1.4% of all traffic -- and
+// catches the motivating case. Same dedupe shape as the other gate injectors.
+export function injectTudastagadasGate(existing: Record<string, unknown>): void {
+  const hooks = (existing.hooks && typeof existing.hooks === 'object'
+    ? existing.hooks
+    : (existing.hooks = {})) as Record<string, unknown>
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'tudastagadas-gate.py'))
+  if (isUnsafeHookCommand(command)) return
+  const entry = {
+    matcher: 'mcp__plugin_telegram_telegram__reply',
+    hooks: [{ type: 'command', command, timeout: 10 }],
+  }
+  const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
+  hooks.PreToolUse = [
+    ...prev.filter((e) => !JSON.stringify(e).includes('tudastagadas-gate.py')),
+    entry,
+  ]
+}
+
+// Idempotent migration: ensure every agent's settings.json carries the
+// tudastagadas-gate hook, same startup-migration shape as ensureCimzettGate.
+export function ensureTudastagadasGate(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'tudastagadas-gate.py'))
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  const ptuJson = JSON.stringify(ptu)
+  if (ptuJson.includes('tudastagadas-gate.py') && hookCommandWired(ptuJson, command)) return false
+  if (isUnsafeHookCommand(command)) return false
+  injectTudastagadasGate(settings)
   if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
   atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
   return true

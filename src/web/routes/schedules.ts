@@ -17,7 +17,7 @@ import {
   SCHEDULED_TASKS_DIR, MAX_SCHEDULED_TASK_PROMPT_LEN,
   listScheduledTasks, writeScheduledTask,
 } from '../scheduled-tasks-io.js'
-import { runScheduledTaskNow } from '../schedule-runner.js'
+import { runScheduledTaskNow, resolveBoundChannel } from '../schedule-runner.js'
 import type { RouteContext } from './types.js'
 
 // Resolve a URL-supplied schedule name to an on-disk dir, blocking path
@@ -126,7 +126,7 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
       throw err
     }
     const data = JSON.parse(body.toString()) as {
-      name: string; description: string; prompt: string; schedule: string; agent?: string; type?: string; skipIfBusy?: boolean; forceSend?: boolean; targetSession?: string
+      name: string; description: string; prompt: string; schedule: string; agent?: string; type?: string; skipIfBusy?: boolean; forceSend?: boolean; targetSession?: string; telegramChatId?: string
     }
     const name = sanitizeScheduleName(data.name || '')
     if (!name) { json(res, { error: 'Name is required' }, 400); return true }
@@ -143,19 +143,38 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
     const dir = join(SCHEDULED_TASKS_DIR, name)
     if (existsSync(dir)) { json(res, { error: 'Schedule already exists' }, 409); return true }
 
+    // BOBGATE902: telegramChatId used to be silently dropped here -- the type
+    // cast above didn't list it and this object literal didn't copy it, so a
+    // POST that targeted e.g. David's chat_id landed with NO telegramChatId
+    // on disk. resolveBoundChannel then fell back to the creating agent's own
+    // owner chat, so the message went to the WRONG recipient with no error at
+    // all -- the same failure class as the 2026-08-31 misaddressed-reply
+    // incident, just produced by the API instead of by a hand-typed reply.
+    // writeScheduledTask (scheduled-tasks-io.ts) already normalizes/accepts
+    // the field and PUT already passed it through untouched; only this POST
+    // object literal needed the field added.
+    const agentName = data.agent || MAIN_AGENT_ID
+    const telegramChatId = data.telegramChatId?.trim() || undefined
     writeScheduledTask(name, {
       description: data.description || '',
       prompt: data.prompt.trim(),
       schedule: data.schedule.trim(),
-      agent: data.agent || MAIN_AGENT_ID,
+      agent: agentName,
       enabled: true,
       type: data.type || 'task',
       skipIfBusy: data.skipIfBusy === true,
       forceSend: data.forceSend === true,
       targetSession: data.targetSession || undefined,
+      telegramChatId,
     })
     logger.info({ name, schedule: data.schedule }, 'Scheduled task created')
-    json(res, { ok: true, name })
+    // Report the ACTUALLY RESOLVED delivery target, not just ok:true -- so a
+    // caller can catch a misconfiguration (wrong/missing chat_id, ambiguous
+    // sub-agent DM set) from the response itself, without re-reading the
+    // task-config.json file as the only way to verify (Pedro's request,
+    // msg 2611, 2026-09-02).
+    const delivery = resolveBoundChannel(agentName, { telegramChatId })
+    json(res, { ok: true, name, delivery })
     return true
   }
 
