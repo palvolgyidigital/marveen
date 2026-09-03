@@ -369,3 +369,127 @@ export function classifyAutomated(headers: InternetMessageHeader[]): AutomatedVe
 
   return { automated: reasons.length > 0, reasons }
 }
+
+/**
+ * Which address an unsubscribe request actually asks us to remove, and how
+ * much the chain is allowed to trust that answer.
+ *
+ * `source` follows the escalation written into store/leiratkozas-agent/ELJARAS.md:
+ *
+ * - `structured`  -- the address came from the unsubscribe link itself, so no
+ *                    guessing happened. The only source that needs no human.
+ * - `body-single` -- exactly one third-party address appears in the body. A
+ *                    candidate, not a fact.
+ * - `sender-assumed` -- the body named nobody, so the From address is the only
+ *                    thing we have. An assumption, and must be labelled as one.
+ * - `ambiguous`   -- the body named several addresses. We deliberately return
+ *                    no target: picking one would unsubscribe a bystander.
+ */
+export type UnsubscribeTargetSource = 'structured' | 'body-single' | 'sender-assumed' | 'ambiguous'
+
+export interface UnsubscribeTarget {
+  /** Address to act on, or null when we refuse to choose between candidates. */
+  address: string | null
+  source: UnsubscribeTargetSource
+  /** False only for `structured`. Everything else needs a human to confirm. */
+  requiresConfirmation: boolean
+  /** Every distinct third-party address found in the body, in order of appearance. */
+  candidates: string[]
+  /** Audit trail, so a dry-run is reviewable without re-reading the raw mail. */
+  reasons: string[]
+}
+
+export interface ResolveUnsubscribeTargetInput {
+  /** Plain-text body. An HTML body must be converted by the caller first. */
+  body: string
+  /** From address of the request, if known. */
+  sender?: string
+  /**
+   * Address carried by the unsubscribe link. Nothing produces this yet: the
+   * UNAS merge tags only expand inside its own sending tool, so today's mailto
+   * link is generic (see reference_unas_unsubscribe_link_limitation). The
+   * parameter exists so that switching to our own send path is a one-line
+   * change here rather than a redesign.
+   */
+  structuredAddress?: string
+  /**
+   * Addresses that are ours and can never be the target: the watched mailboxes
+   * and anything else the caller wants ignored. Matched case-insensitively.
+   */
+  ignoreAddresses?: string[]
+}
+
+// Deliberately loose but anchored: we would rather over-collect candidates and
+// land in `ambiguous` (which asks a human) than miss one and silently
+// unsubscribe the wrong person.
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+
+// The two mailboxes the watcher reads. A request can never be asking us to
+// unsubscribe one of these, and both appear in every unsubscribe footer.
+const SYSTEM_ADDRESSES = ['innova@pdb.hu', 'marketing@pdb.hu']
+
+/**
+ * Decide which address an unsubscribe request refers to.
+ *
+ * The whole point is that it does NOT default to the From address. A forwarded
+ * internal mail, or someone writing on a relative's behalf, both look exactly
+ * like a first-party request if you only read the envelope -- and confirming an
+ * unsubscribe to the wrong person is worse than sending nothing, because the
+ * mail is then evidence that we knew and got it wrong anyway.
+ *
+ * Trailing punctuation is trimmed off matches so that "irjatok a x@y.hu-ra."
+ * does not yield a different address than "x@y.hu". Duplicates collapse, so a
+ * signature that repeats one address stays a single candidate rather than
+ * tipping an otherwise clear request into `ambiguous`.
+ */
+export function resolveUnsubscribeTarget(input: ResolveUnsubscribeTargetInput): UnsubscribeTarget {
+  const ignored = new Set(
+    [...SYSTEM_ADDRESSES, ...(input.ignoreAddresses ?? [])].map((a) => a.trim().toLowerCase()),
+  )
+  const reasons: string[] = []
+
+  const structured = input.structuredAddress?.trim().toLowerCase()
+  if (structured) {
+    return {
+      address: structured,
+      source: 'structured',
+      requiresConfirmation: false,
+      candidates: [structured],
+      reasons: ['address came from the unsubscribe link, no inference'],
+    }
+  }
+
+  const seen = new Set<string>()
+  const candidates: string[] = []
+  for (const raw of input.body.match(EMAIL_PATTERN) ?? []) {
+    // A match can swallow a sentence-final period because `.` is legal inside
+    // a domain; strip what cannot end a real address.
+    const address = raw.toLowerCase().replace(/[.,;:)\]}>'"-]+$/, '')
+    if (ignored.has(address) || seen.has(address)) continue
+    seen.add(address)
+    candidates.push(address)
+  }
+
+  const sender = input.sender?.trim().toLowerCase()
+
+  if (candidates.length === 1) {
+    reasons.push(`exactly one third-party address in the body: ${candidates[0]}`)
+    if (sender && sender !== candidates[0]) {
+      reasons.push(`body address differs from the sender (${sender}), so the sender is not the target`)
+    }
+    return { address: candidates[0], source: 'body-single', requiresConfirmation: true, candidates, reasons }
+  }
+
+  if (candidates.length === 0) {
+    if (!sender) {
+      reasons.push('no address in the body and no sender: nothing to act on')
+      return { address: null, source: 'ambiguous', requiresConfirmation: true, candidates, reasons }
+    }
+    reasons.push('no address in the body, falling back to the sender as an assumption')
+    return { address: sender, source: 'sender-assumed', requiresConfirmation: true, candidates, reasons }
+  }
+
+  reasons.push(`${candidates.length} distinct addresses in the body, refusing to guess: ${candidates.join(', ')}`)
+  if (sender) reasons.push(`sender was ${sender}, recorded but not chosen`)
+  return { address: null, source: 'ambiguous', requiresConfirmation: true, candidates, reasons }
+}
