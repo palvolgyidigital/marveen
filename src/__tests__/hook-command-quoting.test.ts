@@ -14,6 +14,7 @@ import {
   EMAIL_GATE_MATCHER,
 } from '../web/agent-scaffold.js'
 import { PROJECT_ROOT } from '../config.js'
+import { tryResolveFromPath } from '../platform.js'
 
 // Review feedback on PR #803, pinned as tests:
 //  1. every injector must write a QUOTED absolute interpreter path -- an
@@ -55,6 +56,27 @@ describe('hookCommand builder', () => {
     expect(cmd).toContain(HOOK_NODE_BIN)
     expect(cmd).toContain('BLOKKOL')
     expect(cmd).toContain('inditsd ujra a dashboardot')
+  })
+
+  // 2026-09-03 regression: hookCommand() used to be extension-blind and always
+  // picked HOOK_NODE_BIN. For a .py script that means node runs it, raises
+  // ERR_UNKNOWN_FILE_EXTENSION and exits 1 -- a NON-blocking status, so a gate
+  // like cimzett-gate.py looked fully wired (right script, right matcher) and
+  // enforced nothing. A .py hook must get python3, quoted absolute, with the
+  // same fail-closed test -x preview as the node path.
+  it('picks python3, not node, for a .py script', () => {
+    const pythonBin = tryResolveFromPath('python3')
+    expect(pythonBin).not.toBeNull()
+    const cmd = hookCommand('/some/dir/gate.py')
+    expect(cmd).toContain(`"${pythonBin}" "/some/dir/gate.py"`)
+    expect(cmd).not.toContain(`"${HOOK_NODE_BIN}"`)
+    expect(cmd).toMatch(/^test -x /)
+    expect(cmd).toContain('exit 2')
+  })
+
+  it('still picks node for a .mjs script (no cross-talk between the two branches)', () => {
+    const cmd = hookCommand('/some/dir/gate.mjs')
+    expect(cmd).toContain(`"${HOOK_NODE_BIN}" "/some/dir/gate.mjs"`)
   })
 })
 
