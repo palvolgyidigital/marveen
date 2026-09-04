@@ -1,4 +1,9 @@
 import { describe, it, expect } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 // @ts-expect-error -- plain .mjs hook script, no types
 import { gateDecision as selfPaceDecision, stripDataPayloads, stripGitCommitMessages } from '../../scripts/self-pace-gate.mjs'
 import {
@@ -8,6 +13,8 @@ import {
   injectTudastagadasGate,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID } from '../config.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // --- self-pace-gate: blocks the agent from scheduling its own future turns ---
 describe('self-pace-gate gateDecision', () => {
@@ -506,5 +513,80 @@ describe('self-pace-gate: quoted prose cannot fake a command position', () => {
   it('fails CLOSED on an UNQUOTED heredoc tag whose body substitutes', () => {
     // <<PY (no quotes) expands the body, so its contents are not inert.
     expect(selfPaceDecision('Bash', { command: 'cat <<PY\n$(crontab -r)\nPY' }).deny).toBe(true)
+  })
+})
+
+// --- cimzett-gate LASSITO (second tier), added 2026-09-04 after a Zoli-intended
+// summary went to Marci's channel. The first tier looks for a CONTRADICTION
+// (salutation vs chat_id); that message saluted nobody, so there was nothing to
+// contradict and the gate correctly let it through. Smarter text analysis cannot
+// fix this: the text named a THIRD person (David). So the second tier does not
+// identify anyone -- it stops the send ONCE on a recipient SWITCH and prints
+// whose channel this is, by name. An unchanged resend goes through. ---
+describe('cimzett-gate lassito: one-shot speed bump on a recipient switch', () => {
+  const MARCI = '8668856531'
+  const DAVID = '8918812779'
+  const LONG = 'Tajekoztatasul: a MediaMarkt juliusi sell-out elszamolasat David keresere ellenoriztem, es az eredmenyt osszefoglalom. '.repeat(8)
+
+  // The hook resolves its store/ from its own path, so copy both scripts into a
+  // throwaway tree: the tests must not write the live store or the live log.
+  const root = mkdtempSync(join(tmpdir(), 'cimzett-gate-'))
+  mkdirSync(join(root, 'scripts', 'hooks'), { recursive: true })
+  mkdirSync(join(root, 'store'), { recursive: true })
+  const repo = join(__dirname, '..', '..')
+  copyFileSync(join(repo, 'scripts', 'hooks', 'cimzett-gate.py'), join(root, 'scripts', 'hooks', 'cimzett-gate.py'))
+  copyFileSync(join(repo, 'scripts', 'megszolitas-cimzett-ellenor.py'), join(root, 'scripts', 'megszolitas-cimzett-ellenor.py'))
+  const HOOK = join(root, 'scripts', 'hooks', 'cimzett-gate.py')
+
+  const send = (sessionId: string, chatId: string, text: string) => {
+    const payload = JSON.stringify({
+      tool_name: 'mcp__plugin_telegram_telegram__reply',
+      session_id: sessionId,
+      tool_input: { chat_id: chatId, text },
+    })
+    const r = spawnSync('python3', [HOOK], { input: payload, encoding: 'utf8' })
+    return { code: r.status, stderr: r.stderr || '' }
+  }
+
+  it('does not bump the first message of a session (no previous recipient to switch from)', () => {
+    expect(send('s1', MARCI, LONG).code).toBe(0)
+  })
+  it('does not bump when the recipient stays the same', () => {
+    send('s2', MARCI, LONG)
+    expect(send('s2', MARCI, LONG).code).toBe(0)
+  })
+  it('bumps once on a recipient switch, and names the recipient', () => {
+    send('s3', DAVID, LONG)
+    const r = send('s3', MARCI, LONG)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('Marci')
+    expect(r.stderr).toContain('lassito')
+  })
+  it('lets the unchanged resend through (a bump, not a block)', () => {
+    send('s4', DAVID, LONG)
+    expect(send('s4', MARCI, LONG).code).toBe(2)
+    expect(send('s4', MARCI, LONG).code).toBe(0)
+  })
+  it('does not bump a short message, even on a switch', () => {
+    send('s5', DAVID, LONG)
+    expect(send('s5', MARCI, 'Kesz, David lezarta.').code).toBe(0)
+  })
+  it('does not bump a long message that names nobody else', () => {
+    send('s6', DAVID, LONG)
+    expect(send('s6', MARCI, 'x'.repeat(900)).code).toBe(0)
+  })
+  it('fails OPEN on a corrupt state file, and repairs it instead of staying broken', () => {
+    const state = join(root, 'store', '.cimzett-gate-utolso.json')
+    writeFileSync(state, '{ not json')
+    // Unreadable state means no previous recipient is known, so nothing is bumped...
+    expect(send('s7', MARCI, LONG).code).toBe(0)
+    // ...and the file is rewritten, so the gate is not left permanently blind.
+    expect(() => JSON.parse(readFileSync(state, 'utf8'))).not.toThrow()
+  })
+  it('still blocks a real contradiction, and now names the recipient channel', () => {
+    const r = send('s8', MARCI, 'Szia Zoli, kesz a riport.')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('TILTVA')
+    expect(r.stderr).toContain(`${MARCI} = Marci`)
   })
 })

@@ -22,6 +22,23 @@ TULAJ = {
     '8238768700': ['csucsu', 'jozsef', 'pasztor'],
     '6871312283': ['monika', 'moni'],
 }
+# A csatorna-tulajdonos MEGJELENITETT neve. A gate uzenetebe ez kerul, mert egy
+# chat_id-t senki nem ismer fel ranezesre, egy nevet igen.
+NEV = {
+    '8668856531': 'Marci',
+    '8616857946': 'Zoli',
+    '8918812779': 'David',
+    '8321555318': 'Abel',
+    '8238768700': 'Csucsu',
+    '6871312283': 'Monika',
+}
+# A masodik szint (lassito) alsó hosszkorlatja. MERT ERTEK, nem tipp: a sajat
+# kimeno naplon (conversation_log, direction=out, 2037 sor) a "nincs megszolitas
+# + mas tulajdonos nevet emliti + cimzett-valtas" szabaly 10.8%-ot jelolne meg,
+# 600 karakter folott viszont 7.2%-ot, es a hibaosztaly (hosszu, szemelyre szolo
+# osszefoglalo rossz csatornan) a hosszu vegen ul.
+LASSITO_MIN_HOSSZ = 600
+
 # Csak ezeket tekintjuk megszolitasnak, es CSAK a szoveg elejen.
 KOSZONES = r'(?:szia|kedves|hello|hali|udv|udvozollek|jo reggelt|jo napot|jo estet)'
 
@@ -53,6 +70,55 @@ def ellenoriz(chat_id, szoveg):
         if nev in nevek and cid != str(chat_id):
             return (nev, cid)
     return None
+
+def cimzett_neve(chat_id):
+    """A chat_id tulajdonosanak megjelenitett neve, vagy None ha ismeretlen csatorna."""
+    return NEV.get(str(chat_id))
+
+
+def emlitett_tulajok(chat_id, szoveg):
+    """Mely MAS csatorna-tulajdonos neve szerepel a szovegben. [(chat_id, nev)]."""
+    e = ekezettelen(szoveg or '')
+    talalat = []
+    for cid, nevek in TULAJ.items():
+        if str(cid) == str(chat_id):
+            continue
+        for n in nevek:
+            if re.search(r'\b' + re.escape(n) + r'\b', e):
+                talalat.append((cid, NEV.get(cid, n)))
+                break
+    return talalat
+
+
+def lassito(chat_id, szoveg):
+    """MASODIK SZINT. Nem allit hibat, mert nincs mibol: ha a szoveg nem szolit
+    meg senkit, akkor NINCS ellentmondas a cimzettel, csak hianyzik a jel.
+
+    MIERT KELL: 2026-09-04-en egy Zolinak szant osszefoglalo Marci csatornajara
+    ment. A szoveg helyes volt, a cimzett rossz, es megszolitas hijan az elso
+    szintu kapunak nem volt mit osszevetnie -- helyesen engedte at. Egy okosabb
+    szovegelemzes sem fogta volna meg: a szovegben David neve szerepelt, tehat
+    egy "emlitett nev" heurisztika egy HARMADIK emberre mutatott volna.
+
+    EZERT NEM AZONOSITUNK, CSAK MEGALLITUNK EGYSZER: kiirjuk, KINEK a csatornaja
+    ez (nev szerint), es hogy a szoveg kinek a nevet emlegeti. A dontes a
+    kuldoe; a valtozatlan ujrakuldes atmegy.
+
+    Visszaad: (cimzett_nev, [(chat_id, nev), ...]) vagy None.
+    """
+    szoveg = szoveg or ''
+    if megszolitott_nev(szoveg):
+        return None  # van megszolitas: az elso szintu kapu mar dontott rola
+    if len(szoveg.strip()) < LASSITO_MIN_HOSSZ:
+        return None
+    cim = cimzett_neve(chat_id)
+    if not cim:
+        return None  # ismeretlen csatorna: nincs nev, amit szembe lehetne tenni
+    emlitett = emlitett_tulajok(chat_id, szoveg)
+    if not emlitett:
+        return None
+    return (cim, emlitett)
+
 
 def onteszt():
     c = sqlite3.connect('/home/pdb/marveen/store/claudeclaw.db').cursor()
