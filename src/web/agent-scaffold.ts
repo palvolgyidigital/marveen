@@ -172,15 +172,10 @@ export function hookCommand(scriptPath: string, args: readonly string[] = [], ho
   // some other breakage), and the way out -- restarting the dashboard reruns
   // the ensure* migrations, which rewrite the path. A blocking gate with no
   // stated way out is worse than a loud error.
-<<<<<<< HEAD
-  const miss = `governance-kapu: a hook interpretere nem talalhato (${HOOK_NODE_BIN}). A kapu ezert BLOKKOL. Javitas: inditsd ujra a dashboardot, az ujrairja a hook-utakat.`
-  const invocation = gateInvocation(`"${HOOK_NODE_BIN}"`, scriptPath, args)
-  return `test -x "${HOOK_NODE_BIN}" || { echo "${miss}" >&2; exit 2; }; ${failClosedGateRun(invocation, basename(scriptPath), hookTimeoutSec)}`
-=======
   const bin = interpreterFor(scriptPath)
   const miss = `governance-kapu: a hook interpretere nem talalhato (${bin}). A kapu ezert BLOKKOL. Javitas: inditsd ujra a dashboardot, az ujrairja a hook-utakat.`
-  return `test -x "${bin}" || { echo "${miss}" >&2; exit 2; }; "${bin}" "${scriptPath}"`
->>>>>>> 520d1e6f (fix(agent-scaffold): hookCommand() picks python3 for .py hooks, not node)
+  const invocation = gateInvocation(`"${bin}"`, scriptPath, args)
+  return `test -x "${bin}" || { echo "${miss}" >&2; exit 2; }; ${failClosedGateRun(invocation, basename(scriptPath), hookTimeoutSec)}`
 }
 
 // The python twin of hookCommand(). The outgoing-copy-gate is a .py script, so
