@@ -79,7 +79,7 @@ import { measureClaudeCliVersion } from './claude-cli-version.js'
 import { decideStateObserver, stateObserverLaunchEnv } from './state-observer.js'
 import { launchableInstallDefault } from './default-model-guard.js'
 import { getClaudePidForSession, probeChannelPluginLiveness } from '../channel-coordinator/liveness.js'
-import { CHANNEL_PROVIDER, MAIN_AGENT_ID, STORE_DIR, PROJECT_ROOT, SUBAGENT_INBOX_TEE, FLEET_PYTHON_VENV } from '../config.js'
+import { CHANNEL_PROVIDER, MAIN_AGENT_ID, STORE_DIR, PROJECT_ROOT, SUBAGENT_INBOX_TEE, FLEET_PYTHON_VENV, tmuxPaneSizeArgs } from '../config.js'
 import { fleetVenvBin } from '../fleet-venv.js'
 
 // FLEETVENV923: the `<venv>/bin:` prefix for a launch PATH, or '' when the venv
@@ -2007,7 +2007,7 @@ function startRemoteAgentProcess(
   const cmd = buildRemoteLaunchCommand({ workdir, model, continue: hasPriorSession })
 
   try {
-    runTmux(host, ['new-session', '-d', '-s', session, cmd], { timeout: 10000 })
+    runTmux(host, ['new-session', '-d', '-s', session, ...tmuxPaneSizeArgs(), cmd], { timeout: 10000 })
     logger.info({ name, session, host, workdir }, 'Remote agent tmux session started')
     // Fire-and-forget: scheduleIdentitySetup only schedules delayed timers and
     // resolves immediately; startRemoteAgentProcess stays synchronous (out of scope).
@@ -2875,7 +2875,7 @@ export async function startAgentProcess(name: string, opts: StartOpts = {}): Pro
     // reported ok, no session existed under the agent's user, and the first
     // capture-pane failed against the router's empty tmux server.
     const startTarget = agentTmuxTarget(name)
-    runTmux(startTarget, ['new-session', '-d', '-s', session, buildLaunchCmd(dir)], { timeout: 10000 })
+    runTmux(startTarget, ['new-session', '-d', '-s', session, ...tmuxPaneSizeArgs(), buildLaunchCmd(dir)], { timeout: 10000 })
 
     logger.info({ name, session, channelDir: agentChannelDir, runAsUser: startTarget.runAsUser ?? null }, 'Agent tmux session started')
     // APRO920 (c)(2): the --model value actually passed, with the config-chain
@@ -2950,7 +2950,7 @@ export async function startAgentProcess(name: string, opts: StartOpts = {}): Pro
             if (existsSync(agentClaudeMd)) {
               try { symlinkSync(agentClaudeMd, join(fallbackCwd, 'CLAUDE.md')) } catch { /* degrade to context-less */ }
             }
-            runTmux(null, ['new-session', '-d', '-s', session, buildLaunchCmd(fallbackCwd)], { timeout: 10000 })
+            runTmux(null, ['new-session', '-d', '-s', session, ...tmuxPaneSizeArgs(), buildLaunchCmd(fallbackCwd)], { timeout: 10000 })
             logger.warn({ name, session, fallbackCwd }, 'Agent --channels EPERM in trusted dir; relaunched from /tmp fallback')
           } catch (err) {
             logger.error({ err, name, session }, 'EPERM /tmp fallback relaunch failed')

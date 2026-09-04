@@ -9,7 +9,7 @@ import { logger } from '../logger.js'
 import { launchableInstallDefaultSync, launchableDistributionDefaultSync } from './default-model-guard.js'
 import { measureClaudeCliVersionSync } from './claude-cli-version.js'
 import { CLAUDE_MODEL_MIN_CLI, baseModelId, isModelUnsupportedByCli } from '../claude-cli-support.js'
-import { MAIN_AGENT_ID, PROJECT_ROOT, DEFAULT_AGENT_MODEL, DEFAULT_AGENT_MODEL_IS_DISTRIBUTION, WORKER_AUTOUPDATE } from '../config.js'
+import { MAIN_AGENT_ID, PROJECT_ROOT, DEFAULT_AGENT_MODEL, DEFAULT_AGENT_MODEL_IS_DISTRIBUTION, WORKER_AUTOUPDATE, tmuxPaneSizeArgs } from '../config.js'
 import {
   capturePane,
   isSessionReadyForPrompt,
@@ -700,7 +700,7 @@ function startWorkerSessionFor(ctx: WorkerCtx): void {
     customEnvPrefix +
     `cd ${shArg(ctx.home)} && ` +
     `${shArg(claudeLaunchBin)} --dangerously-skip-permissions --model ${shArg(workerModel)}`
-  execFileSync(TMUX, ['new-session', '-d', '-s', ctx.session, '-c', ctx.home, 'bash', '-lc', launch], { timeout: 8000 })
+  execFileSync(TMUX, ['new-session', '-d', '-s', ctx.session, ...tmuxPaneSizeArgs(), '-c', ctx.home, 'bash', '-lc', launch], { timeout: 8000 })
   logger.info({ session: ctx.session, cwd: ctx.home }, 'agent-worker: launched interactive worker session')
   // APRO920 (c)(2): same rationale as startAgentProcess's model-resolved log --
   // which config-chain element supplied the --model value.
