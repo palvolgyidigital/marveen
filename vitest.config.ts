@@ -4,8 +4,16 @@ import { defineConfig, configDefaults } from 'vitest/config'
 // tests/smoke/** by `npm run smoke` (playwright.config.ts, a running dashboard)
 // and tests/browser/** by `npm run browser-verify`
 // (playwright.browser.config.ts, the static front end). Playwright's test() API
-// throws when collected under vitest, which fails the unit gate. Keep all
-// vitest defaults; only carve out the e2e directories.
+// throws when collected under vitest, which fails the unit gate.
+//
+// patches/** holds tracked copies of foreign (non-marveen) source, e.g. a
+// vendored plugin patch, see patches/telegram-plugin/README.md. Its *.test.ts
+// files target that plugin's own runtime (bun:test), not vitest; collecting
+// them here fails the suite before any test runs (0 tests, "Failed Suite"),
+// not because the test itself is red. Exclude the whole tree: any future
+// addition under patches/ is foreign by definition, not a one-off exception.
+//
+// Keep all vitest defaults; only carve out these directories.
 export default defineConfig({
   test: {
     // vendor/**: vendored third-party trees carry their OWN test files with
@@ -14,7 +22,7 @@ export default defineConfig({
     // with zero failing tests, just three unloadable files (Marveen, #1224).
     // Running a vendor's suite is a separate workflow with the vendor's own
     // install, never this one.
-    exclude: [...configDefaults.exclude, 'tests/smoke/**', 'tests/browser/**', 'vendor/**'],
+    exclude: [...configDefaults.exclude, 'tests/smoke/**', 'tests/browser/**', 'vendor/**', 'patches/**'],
     // vitest 4 enforces the 5s default testTimeout on tests that vitest 2 let
     // run long. Three subprocess-spawning tests (send-honesty-final,
     // send-honesty-round2) legitimately take 15-30s: they shell out to
