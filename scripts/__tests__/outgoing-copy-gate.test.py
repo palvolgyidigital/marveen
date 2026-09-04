@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Test the outbound-copy QA gate (scripts/hooks/outgoing-copy-gate.py).
 
-Focus: the name-rule-file three-state distinction (GATEPERSIST816/3, requested
-after the local rules file was lost with no backup, 2026-08-19):
-  - missing/corrupt file  -> unchanged old behaviour (email fail-closed,
-    telegram fail-open with a loud systemMessage warning).
-  - file exists and explicitly declares no_name_rule=true -> a sanctioned,
-    silent state (email proceeds, telegram stays quiet).
-  - file exists with a real bad_name_patterns list -> the name check runs.
+Focus: the name-rule-file state distinction. Two owner decisions meet here,
+and the 2026-09-04 upstream merge combined them (see the RULES_* block in the
+hook for the full reasoning):
+  - GATEPERSIST816/3 (PDB, 2026-08-19): a file that explicitly declares
+    no_name_rule=true is a SANCTIONED state, silent everywhere -- and an
+    ordinary empty list that merely forgot to say so must never be mistaken
+    for it.
+  - CLCOPYGATEHIANY902 (upstream, 2026-09-02): a MISSING or empty file is not
+    the same as a BROKEN one. Missing/empty now fail-OPEN with a loud,
+    user-visible warning, because the file is deliberately not shipped and the
+    old fail-closed path left a fresh install unable to send mail at all.
+    A file that EXISTS but is unusable (invalid) still fails CLOSED.
+So the states are: ok / sanctioned (silent) / missing / empty (open + loud) /
+invalid (closed). What this file guards above all is the pair that looks alike
+and must not behave alike: sanctioned passes SILENTLY, empty-without-flag
+passes LOUDLY.
 
 Also carries a regression pass over the checks this task must NOT touch:
 accents, em dash, double-hyphen, mixed-script (homoglyph). Drives the hook as
@@ -83,9 +92,12 @@ def main():
 
         # --- 1. MISSING file -----------------------------------------------
         missing = rules_path(tmp, "does-not-exist.json")
+        # CLCOPYGATEHIANY902: the email goes OUT, but never silently -- the
+        # sender has to see that the name check did not protect this letter.
         code, out, err = run_hook(email_payload(CLEAN_HU_OK), rules_file=missing)
-        check("missing file: email fail-closed (exit 2)", code, 2)
-        check_true("missing file: email stderr names the rules file", "NEV-SZABALY" in err, err)
+        check("missing file: email fail-OPEN (exit 0)", code, 0)
+        check_true("missing file: the pass is LOUD (systemMessage names the absent check)",
+                   "systemMessage" in out and "HIANYZIK" in out, out)
 
         code, out, err = run_hook(telegram_payload(CLEAN_HU_OK), rules_file=missing)
         check("missing file: telegram fail-open (exit 0)", code, 0)
@@ -117,14 +129,24 @@ def main():
         check("explicit no-rule: telegram proceeds (exit 0)", code, 0)
         check_true("explicit no-rule: telegram stays silent (no systemMessage)", out.strip() == "", out)
 
-        # An explicit no-rule file must not be confused with an ordinary empty
-        # patterns list that forgot to say so -- that must still fail closed
-        # (the "not a side effect of an empty list" requirement).
+        # THE PAIR THAT MUST NOT BE CONFUSED. Since CLCOPYGATEHIANY902 both of
+        # these let the letter out, so the exit code alone no longer separates
+        # them -- the difference is now the NOISE, and that is what is asserted
+        # here. A sanctioned file passes in silence; an ordinary empty list
+        # that merely forgot the flag passes with a loud warning. If a future
+        # change makes the empty list silent, the sanctioned state would have
+        # become reachable by accident, which is what GATEPERSIST816/3 exists
+        # to prevent.
         empty_no_flag = rules_path(tmp, "empty-no-flag.json")
         write_rules(empty_no_flag, {"bad_name_patterns": []})
         code, out, err = run_hook(email_payload(CLEAN_HU_OK), rules_file=empty_no_flag)
-        check("empty patterns, no explicit flag: still fail-closed (exit 2)", code, 2)
-        check_true("empty patterns, no explicit flag: stderr names the rules file", "NEV-SZABALY" in err, err)
+        check("empty patterns, no explicit flag: email fail-OPEN (exit 0)", code, 0)
+        check_true("empty patterns, no explicit flag: the pass is LOUD",
+                   "systemMessage" in out and "URES" in out, out)
+
+        code, out, err = run_hook(telegram_payload(CLEAN_HU_OK), rules_file=empty_no_flag)
+        check_true("empty patterns, no explicit flag: telegram also warns",
+                   "systemMessage" in out, out)
 
         # --- 4. ACTIVE rule (unchanged matching behaviour) ------------------
         active = rules_path(tmp, "active.json")
