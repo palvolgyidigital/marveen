@@ -315,7 +315,9 @@ describe('first-run gate wiring contracts', () => {
     // `startTarget` (agentTmuxTarget(name)), so the old literal matched nothing and the
     // assertion passed a -1 into the ordering check. The contract under test is the ORDER,
     // not the argument, so match the current spawn line.
-    const launchIdx = AGENT_PROCESS.indexOf("runTmux(startTarget, ['new-session', '-d', '-s', session, cmd]")
+    // 2026-09-04: the spawn now also passes the pane size (tmuxPaneSizeArgs(), so a
+    // respawned agent is not stuck with tmux's 80x24 default), which moved this anchor.
+    const launchIdx = AGENT_PROCESS.indexOf("runTmux(startTarget, ['new-session', '-d', '-s', session, ...tmuxPaneSizeArgs(), cmd]")
     expect(stampIdx).toBeGreaterThan(0)
     // Both anchors must actually be FOUND. Without this a renamed call site makes indexOf
     // return -1, and the ordering assertion below goes red for the wrong reason: it reads as
