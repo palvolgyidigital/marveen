@@ -6,7 +6,7 @@ import { homedir, userInfo } from 'node:os'
 import { createHash } from 'node:crypto'
 import { resolveFromPath, tryResolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
-import { MAIN_AGENT_ID, PROJECT_ROOT, DEFAULT_AGENT_MODEL } from '../config.js'
+import { MAIN_AGENT_ID, PROJECT_ROOT, DEFAULT_AGENT_MODEL, tmuxPaneSizeArgs } from '../config.js'
 import {
   capturePane,
   isSessionReadyForPrompt,
@@ -544,7 +544,7 @@ function startWorkerSessionFor(ctx: WorkerCtx): void {
     customEnvPrefix +
     `cd ${shArg(ctx.home)} && ` +
     `${shArg(claudeLaunchBin)} --dangerously-skip-permissions --model ${shArg(workerModel)}`
-  execFileSync(TMUX, ['new-session', '-d', '-s', ctx.session, '-c', ctx.home, 'bash', '-lc', launch], { timeout: 8000 })
+  execFileSync(TMUX, ['new-session', '-d', '-s', ctx.session, ...tmuxPaneSizeArgs(), '-c', ctx.home, 'bash', '-lc', launch], { timeout: 8000 })
   logger.info({ session: ctx.session, cwd: ctx.home }, 'agent-worker: launched interactive worker session')
   // APRO920 (c)(2): same rationale as startAgentProcess's model-resolved log --
   // which config-chain element supplied the --model value.

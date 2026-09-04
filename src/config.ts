@@ -113,6 +113,25 @@ export const APP_TZ_INVALID = appTz.invalid
 export const DEFAULT_AGENT_MODEL =
   cfg('DEFAULT_AGENT_MODEL') || DISTRIBUTION_DEFAULT_AGENT_MODEL
 
+// Geometry of an agent's detached tmux pane. tmux defaults a detached session to
+// 80x24, and 24 rows turned out to be the shared cause of three separate
+// failures on 2026-09-01 (card 874e124d): an 81-line scheduled prompt whose HEAD
+// -- carrying the parked-input marker -- scrolled out of the pane, and a pane so
+// full that the idle FOOTER never rendered, which made the router read a busy
+// session as idle and hold delivery for 10+ minutes. Anna's pane was resized to
+// 80x60 by hand that day and the queued messages went through immediately; this
+// makes that the fleet default at spawn.
+// NOT fixed by this: the 80-COLUMN class (a 96-character delivery-check pattern
+// always wraps at 80), which needs a wider pane and is a separate decision.
+export const AGENT_PANE_COLS = 80
+export const AGENT_PANE_ROWS = 60
+
+/** tmux `new-session` size flags for an agent pane. */
+export const tmuxPaneSizeArgs = (): string[] => [
+  '-x', String(AGENT_PANE_COLS),
+  '-y', String(AGENT_PANE_ROWS),
+]
+
 export const TELEGRAM_BOT_TOKEN = env['TELEGRAM_BOT_TOKEN'] ?? ''
 export const ALLOWED_CHAT_ID = env['ALLOWED_CHAT_ID'] ?? ''
 
