@@ -1,0 +1,27 @@
+--- server.ts.orig	2026-09-04 12:52:15.141259668 +0200
++++ server.ts.patched	2026-09-04 12:51:57.028933974 +0200
+@@ -23,6 +23,7 @@
+ import { homedir } from 'os'
+ import { execFileSync } from 'child_process'
+ import { join, extname, sep } from 'path'
++import { replyMeta } from './reply-meta.ts'
+ 
+ const STATE_DIR = process.env.TELEGRAM_STATE_DIR
+   ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'channels', 'telegram')
+@@ -406,7 +407,7 @@
+     instructions: [
+       'The sender reads Telegram, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
+       '',
+-      'Messages from Telegram arrive as <channel source="telegram" chat_id="..." message_id="..." user="..." ts="...">. If the tag has an image_path attribute, Read that file — it is a photo the sender attached. If the tag has attachment_file_id, call download_attachment with that file_id to fetch the file, then Read the returned path. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
++      'Messages from Telegram arrive as <channel source="telegram" chat_id="..." message_id="..." user="..." ts="...">. If the tag has an image_path attribute, Read that file — it is a photo the sender attached. If the tag has attachment_file_id, call download_attachment with that file_id to fetch the file, then Read the returned path. If the tag has a reply_to_message_id attribute, the sender quoted an earlier message — reply_to_excerpt (when present) is the first part of that message\'s text/caption, so you don\'t need to look it up. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
+       '',
+       'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, and edit_message for interim progress updates. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
+       '',
+@@ -977,6 +978,7 @@
+         user: from.username ?? String(from.id),
+         user_id: String(from.id),
+         ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
++        ...replyMeta(ctx.message?.reply_to_message),
+         ...(imagePath ? { image_path: imagePath } : {}),
+         ...(attachment ? {
+           attachment_kind: attachment.kind,
