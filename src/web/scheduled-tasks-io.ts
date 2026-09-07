@@ -67,9 +67,10 @@ export interface ScheduledTask {
   // limit are recorded as a 'missed' run and reported, never silently dropped.
   catchUpMaxAgeMinutes?: number
   // How long this task may run before the post-fire watchdog calls it stuck and
-  // alerts the operator. Unset uses the global TASK_FIRE_TIMEOUT_MS (5 min),
-  // which is right for a short-cadence heartbeat and wrong for a task whose job
-  // is to think for a while. Clamped at both ends, see resolveStuckTimeoutMs.
+  // alerts the operator. Unset uses the global TASK_FIRE_TIMEOUT_MS (15 min
+  // since 2026-09-07; 5 before that, which alerted on almost any task that did
+  // real work). Set this when a task legitimately runs longer than the default.
+  // Clamped at both ends, see resolveStuckTimeoutMs.
   // DISTINCT from catchUpMaxAgeMinutes: that one judges a MISSED occurrence's
   // staleness before firing; this one judges a RUNNING injection's age.
   stuckAfterMinutes?: number
