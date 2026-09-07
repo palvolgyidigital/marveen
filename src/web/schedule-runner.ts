@@ -147,6 +147,23 @@ const RESUBMIT_LANE_BUSY_MAX_SKIPS = 20
 // and 'error' are handled by the context-guard / stuck-tool-call-watcher so we
 // leave them alone here.
 //
+// The default was 5 minutes until 2026-09-07, and it was too tight to be
+// useful: in six hours it produced four alerts (dream-engine 02:12, auchan
+// 05:35, unas-box 08:05, kanban-audit 08:05) and every one of them was false --
+// each agent was measurably working, mid browser-automation or mid multi-step
+// audit. At that point 53 tasks existed and not one carried a stuckAfterMinutes
+// override, so the default governed all of them, and anything doing real work
+// tripped it. An alert that is wrong four times out of four teaches the reader
+// to ignore it, which is worse than no alert. Raised to 15 minutes with the
+// owner's approval (Marci, 2026-09-07): a genuine hang is noticed ten minutes
+// later, which for these tasks costs nothing, while the false-positive traffic
+// stops. Per-task stuckAfterMinutes remains the way to say "this one legitimately
+// runs longer" (auchan and unas-box are at 30; kanban-audit, memoria-heartbeat
+// and ledger-live-drain at 20). ledger-live-drain is the instructive case: it
+// fires every two minutes, but what the tracker measures is the agent's whole
+// turn, not the script's runtime, so under the old default it alerted whenever
+// the agent was doing real work.
+//
 // Idle clear: if the pane returns to idle at any point, the task completed (or
 // the session was restarted) and the entry is cleared.
 //
@@ -167,6 +184,11 @@ const TASK_FIRE_MAX_TRACK_MS = 6 * 60 * 60_000
 // and noise is what makes a real hang invisible. 45 minutes still catches a
 // genuinely wedged tool call well inside the 6-hour tracking window, and a
 // task that legitimately needs longer sets stuckAfterMinutes.
+// MARVEEN-MEGJEGYZES (2026-09-07, mert eset, amit az upstream indoklasa nem fed le):
+// a figyelő nem a szkript futasidejet meri (ezredmasodpercek), hanem az agens TELJES
+// KORET. A ledger-live-drain ketpercenkent tuzel, es egy ilyen cadence mellett a rovid
+// kuszob nem szelso esetben riaszt, hanem MINDEN alkalommal, amikor az agens erdemi
+// munkat vegez. Ezert a bo default a helyes irany, es ezert nem allitunk .env-bol rovidebbet.
 // 2026-09-23: the 45 minutes above is now the DEFAULT rather than the only value --
 // TASK_STALL_TIMEOUT_MS lets an install say so in .env, which survives updates where a
 // patch to src/ does not. An install that sets nothing keeps behaving exactly as it did.
