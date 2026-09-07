@@ -13,6 +13,7 @@ import { COORDINATOR_AGENT_ID } from '../../channel-coordinator/ingest.js'
 import { sanitizeAgentIdent } from '../../prompt-safety.js'
 import { isKnownAgent } from '../agent-config.js'
 import { OWNER_NAME, SYSTEM_SENDER_IDS, parseSystemSenderIds } from '../../config.js'
+import { isAgentRunning } from '../agent-process.js'
 import { readBody, json, jsonMaybeGzip } from '../http-helpers.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
 import { parseQualifiedId, formatQualifiedId } from '../federation/address.js'
@@ -206,6 +207,22 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     const trimmedOriginNote = origin_note?.trim().slice(0, 120) || null
     const msg = createAgentMessage(from.trim(), storedTo, normalizedContent, trimmedOriginNote)
     logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, originNote: msg.origin_note }, 'Agent message created')
+    // A LOCAL recipient that is not running never receives this: the router
+    // retries for a while and then abandons it, and the failure notice goes to
+    // the MAIN agent, not to the sender. The caller therefore sees a plain 200
+    // and believes it delegated. Federated addresses already get an actionable
+    // error at creation time (see above) -- give the local path the same
+    // courtesy, as a non-breaking warning field rather than a status change, so
+    // existing callers keep working.
+    if (!storedTo.includes('/') && !isAgentRunning(sanitizeAgentIdent(storedTo))) {
+      logger.warn({ id: msg.id, to: msg.to_agent }, 'Agent message queued for a STOPPED agent -- likely to be abandoned')
+      json(res, {
+        ...msg,
+        targetRunning: false,
+        warning: `'${msg.to_agent}' nem fut -- indítsd el (POST /api/agents/${msg.to_agent}/start), várd meg amíg feláll, és küldd újra. Egy leállított ügynöknek küldött üzenet nem várakozik, hanem elveszik.`,
+      })
+      return true
+    }
     json(res, msg)
     return true
   }
@@ -279,7 +296,30 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
   if (msgUpdateMatch && method === 'PUT') {
     const id = parseInt(msgUpdateMatch[1], 10)
     const body = await readBody(req)
-    const { status: newStatus, result } = JSON.parse(body.toString()) as { status: string; result?: string }
+    const { status: newStatus, result, notify } = JSON.parse(body.toString()) as
+      { status: string; result?: string; notify?: boolean }
+
+    // `notify` lets the CLOSER decide whether the reverse [Eredmény] message is
+    // worth an agent turn at the other end. The two cases share this one code
+    // path and cannot be told apart from here:
+    //   - closing a DELEGATED task   -> the delegator is waiting, the ack IS the result;
+    //   - closing an INCOMING report -> the sender already knows it sent it, and the ack
+    //     (typically the 52-char "(nincs eredmény)" form) only lengthens the very queue
+    //     whose delay made the report late. Measured on a live install: several such acks
+    //     sat queued behind an agent whose delivery was already lagging, so closing the
+    //     reports made the queue that the reports arrive in longer still.
+    // Absent (or null) keeps today's behavior, so no existing caller changes.
+    // Rejected BEFORE the status write, not coerced: a truthy `"false"` string would send
+    // exactly the notification the caller asked to skip, and a half-applied close (status
+    // written, unwanted ack sent) is worse than an actionable error the caller can retry
+    // -- the same reason the GET list handler rejects unknown query params.
+    if (notify !== undefined && notify !== null && typeof notify !== 'boolean') {
+      json(res, {
+        error: 'notify must be a boolean',
+        hint: 'omit it for the default (notify the sender), or send JSON true/false -- not a string',
+      }, 400)
+      return true
+    }
 
     let ok = false
     if (newStatus === 'done') ok = markMessageDone(id, result)
@@ -294,7 +334,10 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
       // Notify the delegator: create a reverse message from executor → delegator so
       // they learn the result without polling. See shouldNotifyDelegator for which
       // senders are skipped and why.
-      if (done && shouldNotifyDelegator(done.from_agent, done.to_agent, done.content)) {
+      // `notify: false` suppresses it; `notify: true` is only the default spelled out --
+      // it does NOT override shouldNotifyDelegator, whose guards stop undeliverable and
+      // ping-pong acks, not merely expensive ones.
+      if (done && notify !== false && shouldNotifyDelegator(done.from_agent, done.to_agent, done.content)) {
         // A vagas NE legyen nema, ES legyen KOVETHETO: lasd resultSummary().
         const summary = resultSummary(id, result)
         createAgentMessage(

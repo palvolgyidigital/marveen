@@ -110,6 +110,20 @@ export function hookCommand(scriptPath: string): string {
   return `test -x "${bin}" || { echo "${miss}" >&2; exit 2; }; "${bin}" "${scriptPath}"`
 }
 
+// The python twin of hookCommand(). The outgoing-copy-gate is a .py script, so
+// it cannot reuse HOOK_NODE_BIN. Resolving the interpreter at RUNTIME with
+// `command -v` rather than burning in an absolute path is deliberate and is the
+// better half of the lesson in hookCommand above: the burnt-in node path goes
+// dangling on a `brew upgrade`, and a python path would rot the same way (a
+// pyenv shim, a brew python bump, an Xcode CLT reinstall). What must not happen
+// is the 127 exit, because Claude Code treats 127 as NON-blocking and lets the
+// tool call through -- a gate that silently stops enforcing. So the interpreter
+// is probed first and a miss exits 2, which blocks.
+export function pythonHookCommand(scriptPath: string): string {
+  const miss = 'governance-kapu: a hook interpretere nem talalhato (python3 nincs a PATH-on). A kapu ezert BLOKKOL. Javitas: telepitsd a python3-at, vagy inditsd ujra a dashboardot.'
+  return `command -v python3 >/dev/null 2>&1 || { echo "${miss}" >&2; exit 2; }; python3 "${scriptPath}"`
+}
+
 // Wired-already predicate for the ensure* migrations: is `command` present in
 // the serialized PreToolUse array? The command must be JSON-escaped before the
 // includes() -- comparing the RAW string disagrees with the serialized form on
@@ -288,13 +302,72 @@ export function syncHookMatchers(
   return changed
 }
 
+/**
+ * True when `command`'s script is ALREADY registered under the same hook `event`
+ * in the OTHER settings scope the same session loads -- so adding it here would
+ * make it run twice.
+ *
+ * Claude Code merges the user scope (~/.claude/settings.json) with the project
+ * scope (<cwd>/.claude/settings.json) and runs BOTH; it does not dedupe. Measured
+ * 2026-09-04 on the main agent: a single prompt produced two identical
+ * PROVENANCE-KAPU blocks, i.e. a doubled process spawn and a doubled ~1.4KB
+ * context injection on every flagged prompt. Removing the entry by hand did not
+ * hold -- ensureAgentHooks merged the template back in on the next dashboard
+ * start (measured 07:50: removed -> 0, restart -> 1 again).
+ *
+ * Compares SCRIPT BASENAME, not the command string: the two scopes spell the same
+ * gate differently (`bash -c '[ -f /abs/x.py ] && exec python3 /abs/x.py; exit 0'`
+ * in the template vs `python3 "$CLAUDE_PROJECT_DIR/scripts/hooks/x.py"` in the
+ * repo's project settings), so an exact-string check would never match and the
+ * duplicate would survive.
+ *
+ * Deliberately ONE-WAY: it only suppresses a write into the SHARED user scope
+ * when the project scope already carries the script. The reverse must never
+ * happen -- an agent's project settings are the authoritative copy, while the
+ * user scope it sees may be a per-spawn COPY of ~/.claude/settings.json
+ * (agent-process.ts clones it into each agent's isolated .claude-config), so
+ * letting a derived file suppress the authoritative one would silently drop the
+ * hook the next time that copy is re-provisioned.
+ *
+ * Exported for unit testing.
+ */
+export function hookScriptAlreadyEffectiveInOtherScope(
+  settingsPath: string,
+  event: string,
+  command: string,
+  scopes?: { user: string; project: string },
+): boolean {
+  const userScope = scopes?.user ?? join(homedir(), '.claude', 'settings.json')
+  const projectScope = scopes?.project ?? join(PROJECT_ROOT, '.claude', 'settings.json')
+  if (settingsPath !== userScope) return false
+  if (projectScope === userScope) return false
+  const bn = _hookScriptBasename(command)
+  if (!bn) return false
+  try {
+    if (!existsSync(projectScope)) return false
+    const parsed = JSON.parse(readFileSync(projectScope, 'utf-8')) as { hooks?: Record<string, unknown> }
+    const entries = parsed?.hooks?.[event]
+    if (!Array.isArray(entries)) return false
+    return (entries as HookEntry[]).some((e) =>
+      (e?.hooks ?? []).some((h) => typeof h?.command === 'string' && _hookScriptBasename(h.command) === bn),
+    )
+  } catch { return false }
+}
+
 // Idempotent migration: every agent's settings.json should carry the
 // PreCompact hook (memory save + skill reflection). Pre-refactor agents
 // were scaffolded before scaffoldAgentDir seeded the template, so their
 // file is permissions-only. Merge the template's hooks block in place.
 // Also handles the main agent (MAIN_AGENT_ID) whose settings.json is at
 // ~/.claude/settings.json -- voice hook is added alongside existing hooks.
-export function ensureAgentHooks(name: string): boolean {
+export function ensureAgentHooks(
+  name: string,
+  // Test seam only: overrides the two settings scopes the cross-scope dedupe
+  // guard compares. Production callers pass nothing and get the real
+  // ~/.claude + PROJECT_ROOT/.claude pair, so the guard cannot be tested by
+  // writing into the operator's real home.
+  scopes?: { user: string; project: string },
+): boolean {
   const settingsPath = agentSettingsPath(name)
   const tplPath = join(PROJECT_ROOT, 'templates', 'settings.json.template')
   if (!existsSync(tplPath)) return false
@@ -343,8 +416,21 @@ export function ensureAgentHooks(name: string): boolean {
     if (syncHookMatchers(existingHooks, tplHooks)) changed = true
     for (const [event, handlers] of Object.entries(tplHooks)) {
       if (!existingHooks[event]) {
-        existingHooks[event] = handlers
-        changed = true
+        // Wholesale add of a missing event still has to respect the cross-scope
+        // guard, or the very first merge writes the duplicate the add pass below
+        // would have skipped.
+        const entries = (handlers as HookEntry[])
+          .map((entry) => ({
+            ...entry,
+            hooks: (entry.hooks ?? []).filter(
+              (h) => !h.command || !hookScriptAlreadyEffectiveInOtherScope(settingsPath, event, h.command, scopes),
+            ),
+          }))
+          .filter((entry) => (entry.hooks?.length ?? 0) > 0)
+        if (entries.length > 0) {
+          existingHooks[event] = entries
+          changed = true
+        }
       } else {
         const tplEntries = handlers as HookEntry[]
         const existEntries = existingHooks[event] as HookEntry[]
@@ -355,7 +441,8 @@ export function ensureAgentHooks(name: string): boolean {
         for (const tplEntry of tplEntries) {
           // Add hooks that are missing AND safe to register (registration guard).
           const newHooks = (tplEntry.hooks ?? []).filter(
-            (h) => h.command && !existingCommands.has(h.command) && !isUnsafeHookCommand(h.command),
+            (h) => h.command && !existingCommands.has(h.command) && !isUnsafeHookCommand(h.command)
+              && !hookScriptAlreadyEffectiveInOtherScope(settingsPath, event, h.command, scopes),
           )
           if (newHooks.length > 0) {
             existEntries.push({ ...tplEntry, hooks: newHooks })
@@ -383,7 +470,11 @@ export function ensureAgentHooks(name: string): boolean {
     for (const [event, entries] of Object.entries(tplHooks)) {
       const safeEntries = (entries as HookEntry[]).map((entry) => ({
         ...entry,
-        hooks: (entry.hooks ?? []).filter((h) => !h.command || !isUnsafeHookCommand(h.command)),
+        hooks: (entry.hooks ?? []).filter(
+          (h) => !h.command
+            || (!isUnsafeHookCommand(h.command)
+              && !hookScriptAlreadyEffectiveInOtherScope(settingsPath, event, h.command, scopes)),
+        ),
       })).filter((entry) => (entry.hooks?.length ?? 0) > 0)
       if (safeEntries.length > 0) safeHooks[event] = safeEntries
     }
@@ -526,6 +617,7 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   // allow), so this is a fail-closed layer; the self-pace-gate hook below covers
   // the Bash escape routes a name-deny cannot reach. (2026-06-26 autonom-kor fix.)
   if (agentGetsGovernanceGates(name)) denyList.push(...SELF_PACE_TOOL_DENY)
+
   existing.permissions = {
     allow: profile.filesystem.allow.map(p => resolveProfilePlaceholders(p, ctx)),
     deny: denyList,
@@ -555,6 +647,7 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
     injectKanbanWriteGate(existing)
     injectDigestProvenanceGate(existing)
   }
+  if (agentGetsTelegramCopyGate(name)) injectTelegramCopyGate(existing)
   injectEgressGate(existing)
   injectCimzettGate(existing)
   injectTudastagadasGate(existing)
@@ -733,6 +826,84 @@ export function injectEgressGate(existing: Record<string, unknown>): void {
   ]
 }
 
+// Which Telegram tools carry copyable text out of the install. `reply` is the
+// send route; `edit_message` rewrites a message already on the phone and can
+// just as easily replace a working code block with a broken one.
+export const TELEGRAM_COPY_GATE_MATCHER =
+  'mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message'
+
+// Which agents get the outgoing-copy gate on their Telegram send tools: every
+// sub-agent. The MAIN agent is exempt HERE only because it already carries the
+// same hook in its own committed project settings (.claude/settings.json);
+// injecting a second copy from the scaffold would duplicate it.
+//
+// GATECOPY828, 2026-08-28. The gate script has checked "code block without
+// format=markdownv2" since 2026-08-27, and the memory plus the mandatory
+// telegram-copy-gomb skill both describe it as done. It was not done for the
+// sub-agents: NONE of them had a PreToolUse matcher binding a Telegram tool to
+// this script, so the check never ran outside the main agent. The social agent
+// sent yet another unusable code block that day and the owner had to notice it
+// again. A gate that exists only in the main agent's settings is not a gate,
+// it is a habit that happens to be enforced in one place.
+export function agentGetsTelegramCopyGate(name: string): boolean {
+  return name !== MAIN_AGENT_ID
+}
+
+// Idempotently wire the outgoing-copy-gate PreToolUse hook onto the Telegram
+// send tools. Same shape + dedupe discipline as injectEmailSendGate, with one
+// deliberate difference: the dedupe filter is scoped to entries that carry BOTH
+// this script AND this matcher. The same script is legitimately wired under
+// other matchers (Bash, the email tools) in the main agent's settings, and a
+// basename-only filter would silently delete those on any future pass.
+export function injectTelegramCopyGate(existing: Record<string, unknown>): void {
+  const hooks = (existing.hooks && typeof existing.hooks === 'object'
+    ? existing.hooks
+    : (existing.hooks = {})) as Record<string, unknown>
+  const command = pythonHookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py'))
+  // Registration guard: a /tmp or missing path must never enter shared settings.
+  if (isUnsafeHookCommand(command)) return
+  const entry = {
+    matcher: TELEGRAM_COPY_GATE_MATCHER,
+    hooks: [{ type: 'command', command, timeout: 10 }],
+  }
+  const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
+  hooks.PreToolUse = [
+    ...prev.filter((e) => {
+      const j = JSON.stringify(e)
+      if (!j.includes('outgoing-copy-gate.py')) return true
+      return (e as { matcher?: unknown })?.matcher !== TELEGRAM_COPY_GATE_MATCHER
+    }),
+    entry,
+  ]
+}
+
+// Idempotent migration for the EXISTING fleet: the scaffold only rewrites a
+// sub-agent's settings on spawn, so without this the gate would reach the three
+// running agents no sooner than their next respawn. Returns true if written.
+export function ensureTelegramCopyGate(name: string): boolean {
+  if (!agentGetsTelegramCopyGate(name)) return false
+  const settingsPath = agentSettingsPath(name)
+  if (!existsSync(settingsPath)) return false
+  let settings: Record<string, unknown> = {}
+  try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  const command = pythonHookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py'))
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : []
+  // Two failure modes, same as the email gate: not wired at all, or wired under
+  // a matcher that no longer names the Telegram tools.
+  const wiredHere = ptu.some((e) => {
+    const j = JSON.stringify(e)
+    return j.includes('outgoing-copy-gate.py')
+      && (e as { matcher?: unknown })?.matcher === TELEGRAM_COPY_GATE_MATCHER
+  })
+  if (wiredHere && hookCommandWired(JSON.stringify(ptu), command)) return false
+  injectTelegramCopyGate(settings)
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
 // Idempotent migration: ensure every agent's settings.json carries the egress
 // gate hook. Called at server startup (alongside ensureAgentStalenessHook) so
 // the hook is applied to both existing and newly-created agents without a full
@@ -904,6 +1075,8 @@ export function isPublicFetchHost(value: string): boolean {
   // this is defence-in-depth rather than an open door -- but it is the same
   // class of bypass the literal check already rejects, and it costs one pass.
   if (labels.some((l) => isInwardDashQuad(l))) return false
+  if (labels.some((l) => isInwardPackedLabel(l))) return false
+  if (labels.some((l) => isInwardIPv6Label(l))) return false
   for (let i = 0; i + 3 < labels.length; i++) {
     if (isInwardQuad(labels[i], labels[i + 1], labels[i + 2], labels[i + 3])) return false
   }
@@ -926,10 +1099,83 @@ function isInwardIPv4(o: number[]): boolean {
   return false
 }
 
+/* One part of a dotted address, the way inet_aton reads it: 0x-prefixed is
+   hex, a leading zero is OCTAL, everything else decimal. This is not pedantry:
+   the resolvers behind the wildcard-DNS services use the same rules, so
+   0177.0.0.1.nip.io answers with 127.0.0.1 while a decimal-only parser sees
+   four harmless-looking labels. */
+function inetAtonPart(part: string): number | null {
+  if (/^0[xX][0-9a-fA-F]{1,8}$/.test(part)) return parseInt(part.slice(2), 16)
+  if (/^0[0-7]{1,11}$/.test(part)) return parseInt(part, 8)
+  if (/^(0|[1-9]\d{0,9})$/.test(part)) return parseInt(part, 10)
+  return null
+}
+
 function isInwardQuad(a: string, b: string, c: string, d: string): boolean {
-  const parts = [a, b, c, d]
-  if (!parts.every((p) => /^\d{1,3}$/.test(p))) return false
-  return isInwardIPv4(parts.map((p) => parseInt(p, 10)))
+  const parts = [a, b, c, d].map(inetAtonPart)
+  if (parts.some((n) => n == null)) return false
+  return isInwardIPv4(parts as number[])
+}
+
+/* A single label that IS the whole address, packed into one number:
+   2130706433.nip.io and 7f000001.nip.io both resolve to 127.0.0.1.
+
+   The lower bound is deliberate. Anything under 2^24 does not encode all four
+   octets, and treating it as an address would reject 123.example.com, which is
+   an ordinary public name and exactly what the guard promises not to touch.
+   Nothing is lost by the bound: those values decode into 0.0.0.0/8, which is
+   not routable anyway. */
+const PACKED_MIN = 0x01000000
+function isInwardPackedLabel(label: string): boolean {
+  let n: number | null = null
+  if (/^0[xX][0-9a-fA-F]{1,8}$/.test(label)) n = parseInt(label.slice(2), 16)
+  else if (/^0[0-7]{9,12}$/.test(label)) n = parseInt(label, 8)
+  else if (/^\d{8,10}$/.test(label)) n = Number(label)
+  else if (/^[0-9a-fA-F]{8}$/.test(label) && /[a-fA-F]/.test(label)) n = parseInt(label, 16)
+  if (n == null || !Number.isInteger(n) || n < PACKED_MIN || n > 0xffffffff) return false
+  return isInwardIPv4([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255])
+}
+
+/* sslip.io writes IPv6 with dashes instead of colons, so 0--1.sslip.io is ::1.
+   The dotted-quad and dash-quad checks above never see it, because it is
+   neither. */
+function isInwardIPv6Label(label: string): boolean {
+  if (!/^[0-9a-fA-F-]+$/.test(label) || !label.includes('-')) return false
+  const addr = label.replace(/-/g, ':')
+  if ((addr.match(/::/g) ?? []).length > 1) return false
+  const groups = addr.split(':')
+  if (groups.length < 3 || groups.length > 8) return false
+  if (groups.some((g) => g !== '' && !/^[0-9a-fA-F]{1,4}$/.test(g))) return false
+  const filled = expandIPv6(groups)
+  if (filled == null) return false
+  const [h0] = filled
+  if (filled.every((g, i) => g === (i === 7 ? 1 : 0))) return true // ::1 loopback
+  if (filled.every((g) => g === 0)) return true // :: unspecified
+  if ((h0 & 0xffc0) === 0xfe80) return true // fe80::/10 link-local
+  if ((h0 & 0xfe00) === 0xfc00) return true // fc00::/7 unique local
+  // ::ffff:a.b.c.d and ::a.b.c.d carry an IPv4 inside
+  if (filled.slice(0, 5).every((g) => g === 0) && (filled[5] === 0xffff || filled[5] === 0)) {
+    const v4 = [(filled[6] >>> 8) & 255, filled[6] & 255, (filled[7] >>> 8) & 255, filled[7] & 255]
+    if (isInwardIPv4(v4)) return true
+  }
+  return false
+}
+
+/** '::' filled out to eight 16-bit groups, or null when it does not fit. */
+function expandIPv6(groups: string[]): number[] | null {
+  const gapAt = groups.indexOf('')
+  let parts: string[]
+  if (gapAt === -1) {
+    if (groups.length !== 8) return null
+    parts = groups
+  } else {
+    const head = groups.slice(0, gapAt).filter((g) => g !== '')
+    const tail = groups.slice(gapAt + 1).filter((g) => g !== '')
+    const missing = 8 - head.length - tail.length
+    if (missing < 1) return null
+    parts = [...head, ...Array(missing).fill('0'), ...tail]
+  }
+  return parts.map((g) => parseInt(g || '0', 16))
 }
 
 function isInwardDashQuad(label: string): boolean {

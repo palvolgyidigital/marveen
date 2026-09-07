@@ -13,7 +13,7 @@ import { isBlockedCrossOriginWrite, originMatchesServedHost } from './web/csrf-o
 import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
 import { AGENTS_BASE_DIR, listAgentNames, listAllAgentNames } from './web/agent-config.js'
-import { ensureAgentHooks, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureMessageDedupGuardHook, ensureEgressGate, ensureGovernanceGateCommands, ensureQuarantineReader, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureCimzettGate, ensureTudastagadasGate } from './web/agent-scaffold.js'
+import { ensureAgentHooks, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureGovernanceGateCommands, ensureTelegramCopyGate, ensureQuarantineReader, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureMessageDedupGuardHook, ensureCimzettGate, ensureTudastagadasGate } from './web/agent-scaffold.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
 import { refreshMarveenBotUsername } from './web/telegram.js'
 import { startMessageRouter } from './web/message-router.js'
@@ -22,6 +22,7 @@ import { startScheduleRunner } from './web/schedule-runner.js'
 import { startChannelPluginMonitor } from './web/channel-monitor.js'
 import { startInboundProber } from './web/inbound-probe.js'
 import { startChannelHealthMonitor } from './web/channel-health-monitor.js'
+import { startChannelIntakeMonitor } from './web/channel-intake-monitor.js'
 import { startStuckInputWatcher } from './web/stuck-input-watcher.js'
 import { startInboxNudgeWatcher } from './web/inbox-nudge-watcher.js'
 import { startStuckToolCallWatcher } from './web/stuck-tool-call-watcher.js'
@@ -46,6 +47,7 @@ import { tryHandleAgentConversation } from './web/routes/agent-conversation.js'
 import { tryHandleAgentTaskState } from './web/routes/agent-taskstate.js'
 import { sweepOrphanTaskStates } from './web/agent-taskstate.js'
 import { tryHandleDailyLog } from './web/routes/daily-log.js'
+import { tryHandleHomoglyphs } from './web/routes/homoglyphs.js'
 import { tryHandleMemories } from './web/routes/memories.js'
 import { tryHandleMigrate } from './web/routes/migrate.js'
 import { tryHandleKanban } from './web/routes/kanban.js'
@@ -83,6 +85,7 @@ import { tryHandleVaultSsh } from './web/routes/vault-ssh.js'
 import { tryHandleFleet } from './web/routes/fleet.js'
 import { tryHandleVaultSshKeys } from './web/routes/vault-ssh-keys.js'
 import type { RouteContext } from './web/routes/types.js'
+import { isMalformedBodyError } from './web/malformed-body.js'
 
 const WEB_DIR = join(PROJECT_ROOT, 'web')
 
@@ -182,6 +185,7 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleMessages(routeCtx)) return
       if (await tryHandleFederation(routeCtx)) return
       if (await tryHandleDailyLog(routeCtx)) return
+      if (await tryHandleHomoglyphs(routeCtx)) return
       if (await tryHandleMemories(routeCtx)) return
       if (await tryHandleMigrate(routeCtx)) return
       if (await tryHandleKanban(routeCtx)) return
@@ -225,7 +229,27 @@ export function startWebServer(port = 3420): http.Server {
       res.writeHead(404)
       res.end('Not found')
     } catch (err) {
-      logger.error({ err }, 'Web szerver hiba')
+      // A malformed JSON body is the CALLER's mistake, and until 2026-09-04
+      // this handler hid both that fact and its location: it logged `err`
+      // alone (no route, no size) and answered 500, so a curl that lost a
+      // write to an unescaped newline in `content` looked like a server
+      // crash with nothing but a character offset to identify it. Two such
+      // writes are in the log from that week -- one daily-log entry and one
+      // kanban POST -- and neither caller had any way to notice. Name the
+      // route, and answer 400 so `curl -f` and every HTTP-status check see a
+      // client error instead of a server one.
+      const isBadJson = isMalformedBodyError(err)
+      if (isBadJson) {
+        logger.warn(
+          { method, path, bytes: req.headers['content-length'] ?? '?', reason: (err as Error).message },
+          'Hibas JSON torzs -- a keres NEM hajtodott vegre',
+        )
+        json(res, {
+          error: 'Hibas JSON torzs, a keres nem hajtodott vegre. Sortores es idezojel a szoveges mezokben escape-elve kell legyen.',
+        }, 400)
+        return
+      }
+      logger.error({ err, method, path }, 'Web szerver hiba')
       json(res, { error: 'Szerver hiba' }, 500)
     }
   })
@@ -388,6 +412,12 @@ export function startWebServer(port = 3420): http.Server {
   const channelHealthInterval = webOnly ? undefined : startChannelHealthMonitor()
   if (!webOnly) logger.info('Channel MCP health monitor started (60s poll, 45s offset)')
 
+  // The pane-grep above only sees a channel that SAYS it failed. This one asks
+  // Telegram whether anyone is still fetching the agent's updates, which is the
+  // only signal a silently deaf poller leaves behind.
+  const channelIntakeInterval = webOnly ? undefined : startChannelIntakeMonitor(PROJECT_ROOT)
+  if (!webOnly) logger.info('Channel intake monitor started (5min poll, 100s offset)')
+
   // CostOps: reflect the local config's fixed costs into the ledger once at boot + every
   // 10 minutes. Deliberately NOT done inside the GET /api/costs/summary handler -- a read
   // endpoint must not write (was flagged in review); this is the one place that does.
@@ -512,6 +542,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
       const provPatched: string[] = []
       const egressPatched: string[] = []
       const govPatched: string[] = []
+      const copyGatePatched: string[] = []
       const pruned: string[] = []
       const dedupPatched: string[] = []
       const cimzettPatched: string[] = []
@@ -538,6 +569,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
         if (ensureCimzettGate(agentName)) cimzettPatched.push(agentName)
         if (ensureTudastagadasGate(agentName)) tudastagadasPatched.push(agentName)
         if (ensureGovernanceGateCommands(agentName)) govPatched.push(agentName)
+        if (ensureTelegramCopyGate(agentName)) copyGatePatched.push(agentName)
         ensureQuarantineReader(agentName)
       }
       // EGRESSRENDER824: a grant added to store/egress-allowlist.json must
@@ -558,6 +590,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
       if (cimzettPatched.length) logger.info({ patched: cimzettPatched }, 'cimzett-gate Telegram-reply hook backfilled into agent settings.json')
       if (tudastagadasPatched.length) logger.info({ patched: tudastagadasPatched }, 'tudastagadas-gate Telegram-reply hook backfilled into agent settings.json')
       if (govPatched.length) logger.info({ patched: govPatched }, 'governance gate hook commands upgraded to absolute node path in agent settings.json')
+      if (copyGatePatched.length) logger.info({ patched: copyGatePatched }, 'outgoing-copy-gate wired onto the Telegram send tools in agent settings.json (GATECOPY828)')
     } catch (err) {
       logger.warn({ err }, 'Agent hook backfill skipped')
     }
@@ -591,6 +624,7 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
     workerLivenessCancelled = true
     if (workerLivenessInterval) clearInterval(workerLivenessInterval)
     clearInterval(channelHealthInterval)
+    if (channelIntakeInterval) clearInterval(channelIntakeInterval)
     if (costsSyncInterval) clearInterval(costsSyncInterval)
     clearInterval(stuckInputInterval)
     clearInterval(stuckToolCallInterval)

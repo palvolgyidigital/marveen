@@ -16,7 +16,20 @@ import { defineConfig, configDefaults } from 'vitest/config'
 // Keep all vitest defaults; only carve out these directories.
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, 'tests/smoke/**', 'tests/browser/**', 'patches/**'],
+    // vendor/**: vendored third-party trees carry their OWN test files with
+    // their own dependencies (the gmail fork's tests import nodemailer etc.,
+    // which the root npm ci never installs) -- collecting them makes CI red
+    // with zero failing tests, just three unloadable files (Marveen, #1224).
+    // Running a vendor's suite is a separate workflow with the vendor's own
+    // install, never this one.
+    exclude: [...configDefaults.exclude, 'tests/smoke/**', 'tests/browser/**', 'vendor/**', 'patches/**'],
+    // vitest 4 enforces the 5s default testTimeout on tests that vitest 2 let
+    // run long. Three subprocess-spawning tests (send-honesty-final,
+    // send-honesty-round2) legitimately take 15-30s: they shell out to
+    // watchdog-replay.py and wait for it. Measured 2026-09-04 on the v2->v4
+    // bump: without this line those three red out as timeouts, with it the
+    // suite is green. This is a timeout budget, not a behavioural change.
+    testTimeout: 60000,
     // Hard gates, run in every worker before any test module is imported:
     //  - assert-not-live-install: refuse to run inside a live install (see that
     //    setup file's header for the 2026-07-27 incident it prevents).

@@ -5,6 +5,7 @@ import { STORE_DIR, DB_FILENAME, ALLOWED_CHAT_ID, OLLAMA_URL, APP_TZ } from './c
 import { getEffectiveSettingValue } from './settings-store.js'
 import { logger } from './logger.js'
 import { TOOL_TIMEOUTS } from './tool-timeouts.js'
+import { triggerLikeClause } from './homoglyph.js'
 
 let db: Database.Database
 // The path the CURRENT handle was opened on (null for ':memory:'). Kept so
@@ -393,6 +394,38 @@ export function initDatabase(dbPathOverride?: string): void {
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kanban_comments_card ON kanban_comments(card_id)`)
 
+  // Homoglyph journal (GATEHOMOGLIFSWEEP816): agents write kanban via sqlite3
+  // directly, so an API-level check never sees those writes. These triggers
+  // journal (never block, never modify) inserts whose text carries a measured
+  // Cyrillic look-alike; /api/homoglyphs surfaces the journal. The fix is
+  // always written by someone who read the word -- see src/homoglyph.ts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS homoglyph_findings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      src_table TEXT NOT NULL,
+      src_id TEXT NOT NULL,
+      sample TEXT NOT NULL,
+      found_at INTEGER NOT NULL,
+      resolved_at INTEGER
+    )
+  `)
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS homoglyph_kanban_comments_ai AFTER INSERT ON kanban_comments
+    WHEN ${triggerLikeClause('NEW.content')}
+    BEGIN
+      INSERT INTO homoglyph_findings (src_table, src_id, sample, found_at)
+      VALUES ('kanban_comments', NEW.id, substr(NEW.content, 1, 120), unixepoch());
+    END
+  `)
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS homoglyph_kanban_cards_ai AFTER INSERT ON kanban_cards
+    WHEN ${triggerLikeClause('NEW.title')}
+    BEGIN
+      INSERT INTO homoglyph_findings (src_table, src_id, sample, found_at)
+      VALUES ('kanban_cards', NEW.id, substr(NEW.title, 1, 120), unixepoch());
+    END
+  `)
+
   // Status-change audit trail: one row per real status transition so the board
   // can answer "who moved this card, when, from/to status". Written by
   // moveKanbanCard only when the status actually changes.
@@ -510,6 +543,22 @@ export function initDatabase(dbPathOverride?: string): void {
     )
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_card_labels_label ON kanban_card_labels(label_id)`)
+
+  // Blocker links: "this card is blocked by that card". A join table rather
+  // than a single blocked_by column because a card genuinely waits on more
+  // than one thing, and every schema change here costs a rebuild + a dashboard
+  // restart the operator has to approve -- so the wider shape is paid for once.
+  // Rows are deleted with either endpoint card (see deleteKanbanCard), so a
+  // removed card cannot leave a dangling block on the board.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kanban_card_blockers (
+      card_id TEXT NOT NULL,
+      blocker_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (card_id, blocker_id)
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_card_blockers_blocker ON kanban_card_blockers(blocker_id)`)
 
   // --- Agent Messages ---
   db.exec(`
@@ -738,6 +787,7 @@ export function initDatabase(dbPathOverride?: string): void {
       title TEXT NOT NULL,
       description TEXT,
       category TEXT NOT NULL DEFAULT 'Egyéb',
+      scope TEXT NOT NULL DEFAULT 'munka',
       status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewed','kanban','rejected')),
       source TEXT NOT NULL DEFAULT 'marveen',
       kanban_id TEXT,
@@ -750,6 +800,8 @@ export function initDatabase(dbPathOverride?: string): void {
   // impact/effort scoring -- added after initial release; safe ALTER on existing DBs
   try { db.exec('ALTER TABLE idea_box ADD COLUMN impact INTEGER') } catch { /* already exists */ }
   try { db.exec('ALTER TABLE idea_box ADD COLUMN effort INTEGER') } catch { /* already exists */ }
+  // Migration: existing idea boxes predate the work/personal boundary.
+  try { db.exec("ALTER TABLE idea_box ADD COLUMN scope TEXT NOT NULL DEFAULT 'munka'") } catch { /* column already exists */ }
 
   // --- Idea Comments ---
   db.exec(`
@@ -762,6 +814,21 @@ export function initDatabase(dbPathOverride?: string): void {
     )
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_idea_comments_idea ON idea_comments(idea_id)`)
+
+  // --- Idea Attachments ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS idea_attachments (
+      id TEXT PRIMARY KEY,
+      idea_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      stored_path TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      extracted_text TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_idea_attachments_idea ON idea_attachments(idea_id)`)
 
   // --- Idea Status Log ---
   db.exec(`
@@ -1763,11 +1830,25 @@ export interface KanbanCard {
   sort_order: number
   created_at: number
   updated_at: number
+  // Unix seconds of the card's last STATUS CHANGE (from kanban_card_events),
+  // falling back to created_at when it has never moved. Use this for ageing and
+  // stuck detection; updated_at is reset by comments and edits.
+  last_status_at?: number
   archived_at: number | null
   // Set the first time the card is moved to in_progress and the assigned agent
   // is woken (kanban -> agent dispatch). NULL = never dispatched; the once-only
   // guard so re-dragging a card does not re-prompt the agent.
   dispatched_at: number | null
+}
+
+// A card as referenced FROM another card (blocker links). Deliberately narrow:
+// the detail panel needs a name and a state to render a link, never the whole row.
+export interface KanbanCardRef {
+  id: string
+  seq?: number
+  title: string
+  status: KanbanCard['status']
+  archived_at: number | null
 }
 
 export interface KanbanComment {
@@ -1785,8 +1866,18 @@ export function listKanbanCards(): KanbanCard[] {
   db.prepare(
     "UPDATE kanban_cards SET archived_at = ? WHERE status = 'done' AND archived_at IS NULL AND updated_at < ?"
   ).run(Math.floor(Date.now() / 1000), archiveCutoff)
+  // last_status_at: when the card LAST CHANGED COLUMN, not when its row was
+  // last touched. These are not the same thing, and the difference is a real
+  // blind spot: addKanbanComment() sets updated_at, so a card that has not
+  // moved in weeks looks fresh the moment anyone comments on it. The main agent
+  // comments more than anyone, so ageing measured on updated_at is mostly
+  // measuring the watcher, not the work. Falls back to created_at for cards
+  // that have never moved (no event rows), which is the honest age for those.
   return db
-    .prepare('SELECT rowid AS seq, * FROM kanban_cards WHERE archived_at IS NULL ORDER BY sort_order ASC')
+    .prepare(`SELECT c.rowid AS seq, c.*,
+                     COALESCE((SELECT MAX(e.created_at) FROM kanban_card_events e
+                               WHERE e.card_id = c.id), c.created_at) AS last_status_at
+              FROM kanban_cards c WHERE c.archived_at IS NULL ORDER BY c.sort_order ASC`)
     .all() as KanbanCard[]
 }
 
@@ -2045,6 +2136,10 @@ export function deleteKanbanCard(id: string): boolean {
   return db.transaction((cardId: string) => {
     db.prepare('DELETE FROM kanban_comments WHERE card_id = ?').run(cardId)
     db.prepare('DELETE FROM kanban_card_labels WHERE card_id = ?').run(cardId)
+    // Both directions: the card's own blockers AND the links where it blocks
+    // someone else. Dropping only the first would leave another card marked
+    // "blocked by" a card that no longer exists -- a block nobody can clear.
+    db.prepare('DELETE FROM kanban_card_blockers WHERE card_id = ? OR blocker_id = ?').run(cardId, cardId)
     db.prepare('UPDATE kanban_cards SET parent_id = NULL WHERE parent_id = ?').run(cardId)
     return db.prepare('DELETE FROM kanban_cards WHERE id = ?').run(cardId).changes > 0
   })(id) as boolean
@@ -2197,6 +2292,90 @@ export function getLabelsForAllCards(): Map<string, Label[]> {
     const list = map.get(card_id)
     if (list) list.push(label)
     else map.set(card_id, [label])
+  }
+  return map
+}
+
+// === Card blockers ===
+// "Card A is blocked by card B": one row per (card_id = A, blocker_id = B).
+
+// A blocker link is only useful while it can eventually clear. A cycle (A waits
+// on B, B waits on A) can never clear, so it is refused at insert time rather
+// than rendered as a permanent deadlock. Walks the existing links from the
+// proposed blocker: if the card being blocked is already reachable from it, the
+// new link would close a loop. Iterative with a seen-set, so a pre-existing
+// cycle in the data cannot hang the walk.
+export function blockerWouldCycle(cardId: string, blockerId: string): boolean {
+  if (cardId === blockerId) return true
+  const stmt = db.prepare('SELECT blocker_id FROM kanban_card_blockers WHERE card_id = ?')
+  const seen = new Set<string>([blockerId])
+  const stack = [blockerId]
+  while (stack.length > 0) {
+    const current = stack.pop() as string
+    for (const row of stmt.all(current) as Array<{ blocker_id: string }>) {
+      if (row.blocker_id === cardId) return true
+      if (seen.has(row.blocker_id)) continue
+      seen.add(row.blocker_id)
+      stack.push(row.blocker_id)
+    }
+  }
+  return false
+}
+
+export function addCardBlocker(cardId: string, blockerId: string): void {
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare(
+    'INSERT OR IGNORE INTO kanban_card_blockers (card_id, blocker_id, created_at) VALUES (?, ?, ?)'
+  ).run(cardId, blockerId, now)
+}
+
+export function removeCardBlocker(cardId: string, blockerId: string): boolean {
+  return db.prepare(
+    'DELETE FROM kanban_card_blockers WHERE card_id = ? AND blocker_id = ?'
+  ).run(cardId, blockerId).changes > 0
+}
+
+// The cards THIS card waits on. Archived blockers are kept in the result: a
+// blocker that was archived without being finished still blocks, and hiding it
+// would silently clear the block.
+export function getBlockersForCard(cardId: string): KanbanCardRef[] {
+  return db.prepare(`
+    SELECT c.id, c.rowid AS seq, c.title, c.status, c.archived_at
+    FROM kanban_card_blockers b
+    JOIN kanban_cards c ON c.id = b.blocker_id
+    WHERE b.card_id = ?
+    ORDER BY b.created_at ASC
+  `).all(cardId) as KanbanCardRef[]
+}
+
+// The reverse view: the cards waiting on THIS one. Shown on the detail panel so
+// the operator can see the cost of leaving a card open before closing the modal.
+export function getBlockedByCard(cardId: string): KanbanCardRef[] {
+  return db.prepare(`
+    SELECT c.id, c.rowid AS seq, c.title, c.status, c.archived_at
+    FROM kanban_card_blockers b
+    JOIN kanban_cards c ON c.id = b.card_id
+    WHERE b.blocker_id = ?
+    ORDER BY b.created_at ASC
+  `).all(cardId) as KanbanCardRef[]
+}
+
+// Bulk variant for the board list view -- one JOIN query instead of an N+1
+// per-card lookup, the same shape as getLabelsForAllCards.
+export function getBlockersForAllCards(): Map<string, KanbanCardRef[]> {
+  const rows = db.prepare(`
+    SELECT b.card_id AS card_id, c.id AS id, c.rowid AS seq, c.title AS title,
+           c.status AS status, c.archived_at AS archived_at
+    FROM kanban_card_blockers b
+    JOIN kanban_cards c ON c.id = b.blocker_id
+    ORDER BY b.created_at ASC
+  `).all() as Array<KanbanCardRef & { card_id: string }>
+  const map = new Map<string, KanbanCardRef[]>()
+  for (const row of rows) {
+    const { card_id, ...ref } = row
+    const list = map.get(card_id)
+    if (list) list.push(ref)
+    else map.set(card_id, [ref])
   }
   return map
 }
@@ -2600,6 +2779,33 @@ export function getDispatchedPendingStats(
  * True when the agent's last inbound channel message has no later outbound
  * (unanswered question). Used by the context-restart gate.
  */
+/**
+ * The message id of the newest inbound that has no outbound after it, or null
+ * when nothing is open. Same rule as hasOpenInboundQuestion, but it hands back
+ * WHICH message, so a caller can ask whether the agent has already been shown
+ * it (see openQuestionBlocks in the restart-gate runner).
+ *
+ * Returns '' for an open question whose row carries no message id: the caller
+ * cannot match that against a marker, and the safe reading of "unknown" is
+ * that the agent has not seen it.
+ */
+export function openInboundQuestionMessageId(agentId: string): string | null {
+  const row = db.prepare(
+    `SELECT id, created_at, message_id FROM conversation_log
+       WHERE agent_id = ? AND direction = 'in'
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+  ).get(agentId) as { id: number; created_at: number; message_id: string | null } | undefined
+  if (!row) return null
+  const laterOut = db.prepare(
+    `SELECT 1 FROM conversation_log
+       WHERE agent_id = ? AND direction = 'out'
+         AND (created_at > ? OR (created_at = ? AND id > ?))
+       LIMIT 1`,
+  ).get(agentId, row.created_at, row.created_at, row.id)
+  if (laterOut) return null
+  return row.message_id == null ? '' : String(row.message_id)
+}
+
 export function hasOpenInboundQuestion(agentId: string): boolean {
   const row = db.prepare(
     `SELECT id, created_at FROM conversation_log
@@ -3036,6 +3242,7 @@ export interface IdeaBoxRow {
   title: string
   description: string | null
   category: string
+  scope: 'munka' | 'szemelyes'
   status: 'new' | 'reviewed' | 'kanban' | 'rejected'
   source: string
   kanban_id: string | null
@@ -3045,11 +3252,12 @@ export interface IdeaBoxRow {
   updated_at: number
 }
 
-export function listIdeas(opts?: { status?: string; category?: string }): IdeaBoxRow[] {
+export function listIdeas(opts?: { status?: string; category?: string; scope?: IdeaBoxRow['scope'] }): IdeaBoxRow[] {
   let q = 'SELECT * FROM idea_box WHERE 1=1'
   const params: string[] = []
   if (opts?.status) { q += ' AND status = ?'; params.push(opts.status) }
   if (opts?.category) { q += ' AND category = ?'; params.push(opts.category) }
+  if (opts?.scope) { q += ' AND scope = ?'; params.push(opts.scope) }
   q += ' ORDER BY created_at DESC'
   return db.prepare(q).all(...params) as IdeaBoxRow[]
 }
@@ -3057,18 +3265,19 @@ export function listIdeas(opts?: { status?: string; category?: string }): IdeaBo
 export function createIdea(idea: Omit<IdeaBoxRow, 'created_at' | 'updated_at'>): void {
   const now = Math.floor(Date.now() / 1000)
   db.prepare(
-    `INSERT INTO idea_box (id, title, description, category, status, source, kanban_id, impact, effort, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(idea.id, idea.title, idea.description ?? null, idea.category, idea.status, idea.source, idea.kanban_id ?? null, idea.impact ?? null, idea.effort ?? null, now, now)
+    `INSERT INTO idea_box (id, title, description, category, scope, status, source, kanban_id, impact, effort, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(idea.id, idea.title, idea.description ?? null, idea.category, idea.scope, idea.status, idea.source, idea.kanban_id ?? null, idea.impact ?? null, idea.effort ?? null, now, now)
 }
 
-export function updateIdea(id: string, patch: Partial<Pick<IdeaBoxRow, 'title' | 'description' | 'category' | 'status' | 'kanban_id' | 'impact' | 'effort'>>): boolean {
+export function updateIdea(id: string, patch: Partial<Pick<IdeaBoxRow, 'title' | 'description' | 'category' | 'scope' | 'status' | 'kanban_id' | 'impact' | 'effort'>>): boolean {
   const now = Math.floor(Date.now() / 1000)
   const sets: string[] = ['updated_at = ?']
   const params: unknown[] = [now]
   if (patch.title !== undefined) { sets.push('title = ?'); params.push(patch.title) }
   if (patch.description !== undefined) { sets.push('description = ?'); params.push(patch.description) }
   if (patch.category !== undefined) { sets.push('category = ?'); params.push(patch.category) }
+  if (patch.scope !== undefined) { sets.push('scope = ?'); params.push(patch.scope) }
   if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status) }
   if (patch.kanban_id !== undefined) { sets.push('kanban_id = ?'); params.push(patch.kanban_id) }
   if (patch.impact !== undefined) { sets.push('impact = ?'); params.push(patch.impact) }
@@ -3078,7 +3287,11 @@ export function updateIdea(id: string, patch: Partial<Pick<IdeaBoxRow, 'title' |
 }
 
 export function deleteIdea(id: string): boolean {
-  return db.prepare('DELETE FROM idea_box WHERE id = ?').run(id).changes > 0
+  const remove = db.transaction(() => {
+    db.prepare('DELETE FROM idea_attachments WHERE idea_id = ?').run(id)
+    return db.prepare('DELETE FROM idea_box WHERE id = ?').run(id).changes > 0
+  })
+  return remove()
 }
 
 export function listIdeaCategories(): string[] {
@@ -3106,6 +3319,38 @@ export function addIdeaComment(ideaId: string, author: string, content: string):
   ).run(ideaId, author, content, now)
   db.prepare('UPDATE idea_box SET updated_at = ? WHERE id = ?').run(now, ideaId)
   return { id: Number(info.lastInsertRowid), idea_id: ideaId, author, content, created_at: now }
+}
+
+// --- Idea Attachments ---
+
+export interface IdeaAttachmentRow {
+  id: string
+  idea_id: string
+  filename: string
+  stored_path: string
+  mime: string
+  size: number
+  extracted_text: string | null
+  created_at: number
+}
+
+export function listIdeaAttachments(ideaId: string): IdeaAttachmentRow[] {
+  return db.prepare('SELECT * FROM idea_attachments WHERE idea_id = ? ORDER BY created_at ASC').all(ideaId) as IdeaAttachmentRow[]
+}
+
+export function getIdeaAttachment(id: string): IdeaAttachmentRow | undefined {
+  return db.prepare('SELECT * FROM idea_attachments WHERE id = ?').get(id) as IdeaAttachmentRow | undefined
+}
+
+export function addIdeaAttachment(row: IdeaAttachmentRow): void {
+  db.prepare(
+    `INSERT INTO idea_attachments (id, idea_id, filename, stored_path, mime, size, extracted_text, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(row.id, row.idea_id, row.filename, row.stored_path, row.mime, row.size, row.extracted_text ?? null, row.created_at)
+}
+
+export function deleteIdeaAttachment(id: string): boolean {
+  return db.prepare('DELETE FROM idea_attachments WHERE id = ?').run(id).changes > 0
 }
 
 // --- Idea Status Log ---
@@ -3188,6 +3433,100 @@ export interface WorkflowCandidate {
 export function getRecentToolCalls(sinceSecs: number): ToolCallLogRow[] {
   const cutoff = Math.floor(Date.now() / 1000) - sinceSecs
   return db.prepare('SELECT * FROM tool_call_log WHERE created_at >= ? ORDER BY created_at ASC').all(cutoff) as ToolCallLogRow[]
+}
+
+// Per-agent tool-call telemetry for the status view, in ONE query.
+//
+// `total` distinguishes the two answers the view must never conflate: an agent
+// missing from this map has NO telemetry (the hook is not registered for it),
+// which is not the same as an agent that made zero calls since it started.
+// `sinceWork` counts only the calls after the given per-agent start time.
+export function getAgentToolActivity(
+  windowSecs: number,
+  workStartByAgent: Record<string, number | null> = {},
+): Record<string, { total: number; sinceWork: number; lastAt: number }> {
+  const cutoff = Math.floor(Date.now() / 1000) - windowSecs
+  const rows = db.prepare(
+    `SELECT agent_id, COUNT(*) AS total, MAX(created_at) AS last_at
+     FROM tool_call_log
+     WHERE created_at >= ? AND agent_id IS NOT NULL
+     GROUP BY agent_id`
+  ).all(cutoff) as { agent_id: string; total: number; last_at: number }[]
+
+  const out: Record<string, { total: number; sinceWork: number; lastAt: number }> = {}
+  const sinceStmt = db.prepare(
+    'SELECT COUNT(*) AS n FROM tool_call_log WHERE agent_id = ? AND created_at >= ?'
+  )
+  for (const r of rows) {
+    const start = workStartByAgent[r.agent_id]
+    const sinceWork = start == null
+      ? r.total
+      : (sinceStmt.get(r.agent_id, Math.max(start, cutoff)) as { n: number }).n
+    out[r.agent_id] = { total: r.total, sinceWork, lastAt: r.last_at }
+  }
+  return out
+}
+
+// Last inbound (task handed TO the agent) and last outbound (the agent itself
+// reporting) per agent. delivered_at is the honest inbound stamp: a row exists
+// from the moment it is queued, but it only reached the agent once delivered.
+export function getAgentMessageActivity(): Record<string, {
+  lastInboundAt: number | null
+  lastOutboundAt: number | null
+  lastInboundSubject: string | null
+}> {
+  const out: Record<string, { lastInboundAt: number | null; lastOutboundAt: number | null; lastInboundSubject: string | null }> = {}
+  const ensure = (a: string) => (out[a] ??= { lastInboundAt: null, lastOutboundAt: null, lastInboundSubject: null })
+
+  const inbound = db.prepare(
+    `SELECT to_agent AS agent, MAX(delivered_at) AS at
+     FROM agent_messages WHERE delivered_at IS NOT NULL GROUP BY to_agent`
+  ).all() as { agent: string; at: number }[]
+  for (const r of inbound) ensure(r.agent).lastInboundAt = r.at
+
+  const outbound = db.prepare(
+    `SELECT from_agent AS agent, MAX(created_at) AS at
+     FROM agent_messages GROUP BY from_agent`
+  ).all() as { agent: string; at: number }[]
+  for (const r of outbound) ensure(r.agent).lastOutboundAt = r.at
+
+  const subjectStmt = db.prepare(
+    `SELECT content FROM agent_messages
+     WHERE to_agent = ? AND delivered_at IS NOT NULL
+     ORDER BY delivered_at DESC LIMIT 1`
+  )
+  for (const agent of Object.keys(out)) {
+    if (out[agent].lastInboundAt === null) continue
+    const row = subjectStmt.get(agent) as { content: string } | undefined
+    if (row) out[agent].lastInboundSubject = row.content.split('\n')[0].slice(0, 120)
+  }
+  return out
+}
+
+// The card each agent currently has in_progress, with the moment it entered
+// that status. enteredStatusAt comes from kanban_card_events and is null for
+// cards whose transition predates the event log covering this path -- null, not
+// a guess: updated_at moves on every edit and would silently misreport age.
+export function getAgentCurrentCards(): Record<string, { id: string; title: string; enteredStatusAt: number | null }> {
+  const cards = db.prepare(
+    `SELECT id, title, assignee FROM kanban_cards
+     WHERE status = 'in_progress' AND archived_at IS NULL AND assignee IS NOT NULL
+     ORDER BY updated_at DESC`
+  ).all() as { id: string; title: string; assignee: string }[]
+
+  const enteredStmt = db.prepare(
+    `SELECT MAX(created_at) AS at FROM kanban_card_events
+     WHERE card_id = ? AND to_status = 'in_progress'`
+  )
+  const out: Record<string, { id: string; title: string; enteredStatusAt: number | null }> = {}
+  for (const c of cards) {
+    // One row per agent: the most recently touched card wins, matching the
+    // one-in_progress-card-at-a-time rule the fleet already works under.
+    if (out[c.assignee]) continue
+    const at = (enteredStmt.get(c.id) as { at: number | null } | undefined)?.at ?? null
+    out[c.assignee] = { id: c.id, title: c.title, enteredStatusAt: at }
+  }
+  return out
 }
 
 export function analyzeWorkflowCandidates(sinceSecs = 3600, minToolCalls = 5, gapSecs = 300): WorkflowCandidate[] {
@@ -3789,4 +4128,3 @@ export function listOtelTraces(limit = 50): OtelTraceSummary[] {
     LIMIT ?
   `).all(limit) as OtelTraceSummary[]
 }
-

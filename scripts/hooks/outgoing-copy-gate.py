@@ -306,8 +306,12 @@ HU_MARKERS = [
     "hogy", "nem", "vagy", "amit", "ami", "mert", "ezt", "ez a", "van", "lesz",
     "kell", "tehat", "tehát", "koszonom", "köszönöm", "szia", "sziasztok",
     "kerlek", "kérlek", "csatolva", "udvozlettel", "üdvözlettel", "levelet",
-    "level", "kuldom", "küldöm", "jelezz", "irj", "írj", "mar", "már", "csak",
+    "kuldom", "küldöm", "jelezz", "irj", "írj", "mar", "már", "csak",
 ]
+# A puszta "level" 2026-08-26-an kikerult a markerek kozul. Magyar markerkent
+# gyenge (a gyakori alak a "levelet", az mar bent van), viszont az ANGOL "level"
+# minden elofordulasa magyar-pontot adott egy angol szovegnek, es igy indithatta
+# el az ekezet-vizsgalatot olyan uzeneten, ami nem is magyar.
 
 # Accentless spellings of frequent Hungarian words -> the correct form. Every
 # entry is a word that CANNOT be spelled without its accent, so a hit inside
@@ -439,16 +443,39 @@ _LOCAL_RULES = os.environ.get(
                  "store", "outgoing-copy-gate-rules.json"),
 )
 
+_GATE_LOG = os.path.join(os.path.dirname(_LOCAL_RULES), "outgoing-copy-gate.log")
 
-# CLCOPYGATEHIANY902 (upstream, owner decision TG 14442) MERGED WITH
-# GATEPERSIST816/3 (PDB, 2026-08-19). Two independent fixes to the same
-# question, from opposite directions, so the merged policy has FIVE states:
+
+def _gate_log(message: str) -> None:
+    """Append one TIMESTAMPED line to the gate log.
+
+    The log used to carry bare text. Measured 2026-09-05: 8005 lines, four
+    distinct messages, and one of them recorded a FAIL-OPEN pass-through on the
+    Telegram branch -- a message that went out unaudited -- with no way to tell
+    which day it happened on, let alone which message it was. A gate log whose
+    entries cannot be placed in time cannot be used to check anything. Local
+    time with the offset, never UTC.
+    """
+    try:
+        from datetime import datetime
+        stamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        with open(_GATE_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {message.rstrip()}\n")
+    except OSError:
+        pass
+
+
+# CLCOPYGATEHIANY902 (owner decision, TG 14442) MERGED WITH GATEPERSIST816/3
+# (PDB install, 2026-08-19). Two independent fixes to the same question, from
+# opposite directions, so the merged policy has FIVE states:
 #
 #   "ok"         -> patterns loaded, the name check enforces as before.
 #   "sanctioned" -> the file EXISTS and explicitly says "no_name_rule": true.
-#                   PDB-specific: our rules file was lost in August with no
-#                   backup, and the owner decided not to reconstruct it. That
-#                   is a taken decision, not a loss, so it is silent
+#                   Reported by the PDB install, 2026-08-19: their rules file
+#                   was lost with no backup, and the owner decided not to
+#                   reconstruct it. That is a taken decision, not a loss, and
+#                   an install that has made it should not be nagged about it
+#                   on every send. So this state is silent
 #                   EVERYWHERE: no log line, no systemMessage, no block. Note
 #                   the early return BELOW, which deliberately skips the
 #                   logging tail. An ordinary empty list WITHOUT the flag does
@@ -465,12 +492,12 @@ _LOCAL_RULES = os.environ.get(
 #                   uncompilable regex). Somebody TRIED to configure it and got
 #                   it wrong: the email path stays fail-CLOSED until repaired.
 #
-# WHY THE MERGE IS NOT A CHOICE BETWEEN THE TWO SIDES: upstream's code has no
-# notion of the no_name_rule key, so it reads our live rules file (flag true,
-# empty pattern list) as "empty" and would stamp a loud warning on EVERY
-# outgoing letter, customer mail included. Our code has no notion of
-# "invalid", so a fresh install with no file at all would block mail entirely.
-# Each side is wrong exactly where the other one is right.
+# WHY THE MERGE IS NOT A CHOICE BETWEEN THE TWO: without the sanctioned state,
+# a live rules file carrying the flag with an empty pattern list reads as
+# "empty", and a loud warning gets stamped on EVERY outgoing letter, customer
+# mail included. Without the missing/empty/invalid split, a fresh install with
+# no file at all cannot send mail at all. Each half is wrong exactly where the
+# other one is right, which is why both are here.
 RULES_OK = "ok"
 RULES_SANCTIONED = "sanctioned"
 RULES_EMPTY = "empty"
@@ -495,10 +522,22 @@ def load_bad_name():
                 state = RULES_INVALID
             elif pats:
                 return (re.compile("|".join(pats)), RULES_OK)
-            elif data.get("no_name_rule") is True:
+            elif data.get("no_name_rule") is True or data.get("name_check_disabled") is True:
                 # Returns HERE, before the logging tail, on purpose: a taken
                 # decision must not write a "the protection is gone" line into
-                # the ledger on every single run.
+                # the ledger on every single run. An alarm that can never be
+                # answered is the one people learn to ignore -- it was drowning
+                # the real signals in the same log (571 lines here by
+                # 2026-09-04, CLCOPYGATEDONTES904).
+                # TWO spellings of the SAME decision are accepted, because two
+                # installs each documented one before the branches met:
+                #   {"no_name_rule": true, "no_name_rule_reason": "why"}
+                #     (GATEPERSIST816/3, the PDB install)
+                #   {"bad_name_patterns": [], "name_check_disabled": true,
+                #    "decided_at": "2026-09-04", "note": "why"}
+                #     (CLCOPYGATEDONTES904)
+                # Dropping either spelling would silently turn that install's
+                # recorded decision back into a loud "empty".
                 return (None, RULES_SANCTIONED)
             else:
                 state = RULES_EMPTY
@@ -513,13 +552,8 @@ def load_bad_name():
     # first cut logged only the exception branches, so empty/schema-invalid
     # left no log line while missing did -- same event class, inconsistent
     # ledger).
-    try:
-        log_path = os.path.join(os.path.dirname(_LOCAL_RULES), "outgoing-copy-gate.log")
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(f"outgoing-copy-gate: NEV-SZABALY {state.upper()} ({_LOCAL_RULES}) -- "
-                     "a nev-ellenorzes NEM fut.\n")
-    except OSError:
-        pass
+    _gate_log(f"outgoing-copy-gate: NEV-SZABALY {state.upper()} ({_LOCAL_RULES}) -- "
+              "a nev-ellenorzes NEM fut.")
     return (None, state)
 
 
@@ -603,7 +637,30 @@ def _hit_context(prose: str, pos: int, length: int) -> str:
 # fennakadt a `video_view` esemenynevben levo "video"-n. A szobonto az aláhúzást
 # hataroljelnek veszi, tehat minden snake_case azonosito, fajlnev, URL-slug es
 # domain beszallit egy "magyar szot", ami ott ekezet nelkul HELYES. Ugyanaz az
-# osztaly, mint a 2026-08-11-i `level` fajlnev-talalat. A javitas nem a szotarbol
+# osztaly, mint a 2026-08-11-i `level` fajlnev-talalat. Ugyanide tartozik a
+# 2026-08-25-i talalat ugyanebbol az osztalybol: a TULAJDONNEV + kotojeles toldalek
+# ("Chrome-ot", "Drive-ra") is puszta "ot"/"ra" tokenre esik szet, es az "ot" benne
+# van a szotarban (-> "ot"). Ezert a maszk a nagybetuvel kezdodo tovet is elfogadja,
+# de CSAK ha a kotojel utan legfeljebb negy kisbetu all: egy valodi magyar osszetett
+# szo masodik tagja ("Telegram-hidam") tipikusan hosszabb, tehat az tovabbra is fennakad.
+# 2026-08-26-i talalat, HARMADIK a sorozatban, de mas alosztaly: nem toldalek volt,
+# hanem egy ANGOL SZO, ami veletlenul egy ekezetes magyar szo ekezetlen alakja.
+# A "level 1" (autonomia-szint) alak a szotarban "level -> level" javaslatot valtott ki,
+# es ketszer blokkolta a reggeli uzenetet. A szotarbol NEM vettem ki a bejegyzest, mert
+# a magyar "level" tenyleg hibas alak; a maszk csak a SZAM ELOTTI angol hasznalatot vagja ki.
+# Ami igy is fennakad: az idezojelbe tett, magarol beszelo "level" szo. Arra a kod-span
+# (backtick) a kijarat, az ugyanis maszkolva van.
+# 2026-08-27, NEGYEDIK a sorozatban: a KOTOJELES KISBETUS AZONOSITO. Az utemezett
+# feladatok es skillek nevei (folyamatos-ellenorzes, mentes-lemaradas-ellenorzes,
+# kontextus-atadas-visszaallitas) ekezet nelkuli magyar szavakbol allnak, mert fajl- es
+# mappanevek. A szotar ezeket valodi talalatnak latja, pedig AZONOSITOK, nem proza --
+# a gazdanak pont igy, betuhiven kell leirni oket, kulonben nem talalja meg a gepen.
+# A maszk ezert kivagja a legalabb ket tagu, csupa kisbetus, kotojellel osszekotott
+# alakokat. Egy valodi magyar mondat nem all ilyen alakbol, es a NAGYBETUS kezdetu
+# osszetetelekre (Chrome-ot) mar van kulon, szigorubb szabaly folotte.
+# 2026-08-24-i talalat: a szambol es kotojeles magyar toldalekbol allo alak
+# ("8:09-es", "2-es", "17:06-kor") a szobontonal puszta "es"/"kor" tokenne esik
+# szet, amit a szotar hibanak lat -- pedig ott toldalek, nem szo. A javitas nem a szotarbol
 # vesz ki (az elrontana a valodi talalatokat is), hanem a technikai regiokat
 # vagja ki a vizsgalt szovegbol. A gondolatjel- es nev-ellenorzes NEM ezen fut.
 TECHNICAL = re.compile(
@@ -613,6 +670,10 @@ TECHNICAL = re.compile(
       | \b\w+(?:_\w+)+\b            # snake_case azonosito
       | \b\w+\.[A-Za-z]{2,10}\b     # fajlnev / domain (video.mp4, marveen.io)
       | \b[\w-]*/[\w/-]+            # utvonal / slug
+      | \d+(?:[.:,]\d+)*-[^\W\d_]+   # szam + magyar toldalek (8:09-es, 2-es, 17:06-kor)
+      | \b[A-ZÁÉÍÓÖŐÚÜŰ][^\W\d_]*-[a-záéíóöőúüű]{1,4}\b   # tulajdonnev + toldalek (Chrome-ot, Drive-ra)
+      | \blevel\s+\d+\b            # angol "level 1" (autonomia-szint, log-szint)
+      | \b[a-z]+(?:-[a-z]+){1,4}\b    # kotojeles kisbetus azonosito (feladat- es skill-nevek)
     """,
     re.X,
 )
@@ -694,19 +755,36 @@ def telegram_gate(tool_input: dict) -> None:
         text = collect_telegram_body(tool_input)
         if not text.strip():
             sys.exit(0)  # files-only reply or empty text: nothing to audit
+        # GATECOPY827: a masolhato kodblokk CSAK markdownv2 modban lesz
+        # kodblokk. A reply tool `format` parametere alapertelmezesben "text",
+        # es plain textben a Telegram nem parsolja a harom backtickot, tehat
+        # nincs copy gomb -- a szoveg nyersen, a backslash-escape-ekkel egyutt
+        # jelenik meg. Ez 2026-08-17 ota OTSZOR ment ki igy (a memoriaban
+        # feedback_telegram_codeblock_needs_markdownv2, plusz a kotelezove tett
+        # telegram-copy-gomb skill), es egyik alkalommal sem tudashiany volt,
+        # hanem kihagyott lepes. Ezert innentol gepi kapu allitja meg, nem
+        # emlekezet. A vizsgalat a NYERS szovegen fut, mert a fence-t a
+        # MDV2_ESCAPE feloldas nem erinti.
+        raw = "\n".join(str(tool_input[f]) for f in ("text", "caption", "message")
+                        if tool_input.get(f))
+        if "```" in raw and str(tool_input.get("format", "")).lower() != "markdownv2":
+            sys.stderr.write(
+                "KIMENO-SZOVEG KAPU (Telegram): TILTVA, a kodblokk nem lenne masolhato.\n\n"
+                "  - A szoveg harom backtickes kodblokkot tartalmaz, de a hivasban\n"
+                "    format=\"" + str(tool_input.get("format") or "text") + "\". Plain textben a Telegram nem ad copy gombot,\n"
+                "    es a MarkdownV2 escape-ek (\\. \\- \\() nyersen latszanak.\n\n"
+                "Kuldd ujra ugyanezt a szoveget format=\"markdownv2\"-vel. Kodblokkon\n"
+                "belul csak a backtickot es a backslasht kell escapelni, a blokkon\n"
+                "kivuli prozat viszont teljesen (_*[]()~`>#+-=|{}.!).\n"
+            )
+            sys.exit(2)
         problems = audit(text)
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001 -- deliberate blanket: fail-open path
-        warn = f"outgoing-copy-gate: TELEGRAM-ag belso hiba, FAIL-OPEN atengedes: {exc!r}\n"
-        sys.stderr.write(warn)
-        try:
-            log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__)))), "store", "outgoing-copy-gate.log")
-            with open(log_path, "a", encoding="utf-8") as fh:
-                fh.write(warn)
-        except OSError:
-            pass
+        warn = f"outgoing-copy-gate: TELEGRAM-ag belso hiba, FAIL-OPEN atengedes: {exc!r}"
+        sys.stderr.write(warn + "\n")
+        _gate_log(warn)
         sys.exit(0)
     if problems:
         sys.stderr.write(
@@ -720,9 +798,10 @@ def telegram_gate(tool_input: dict) -> None:
     # de a figyelmeztetes ODA megy, ahol a session tenyleg latja -- a hook
     # stdout systemMessage mezoje a futo sessionben jelenik meg, nem egy
     # logfajlban, amit senki nem olvas.
-    # GATEPERSIST816/3: a tudatosan felfuggesztett szabaly (RULES_SANCTIONED)
-    # mar nem veszteseg, nincs mit jelezni, a Telegram-ag ott csendben marad.
-    # Minden mas nem-ok allapot (missing/empty/invalid) figyelmeztetest kap.
+    # GATEPERSIST816/3 + CLCOPYGATEDONTES904: a tudatosan felfuggesztett
+    # szabaly (RULES_SANCTIONED, barmelyik flag-irassal) mar nem veszteseg,
+    # nincs mit jelezni, a Telegram-ag ott csendben marad. Minden mas nem-ok
+    # allapot (missing/empty/invalid) figyelmeztetest kap.
     if RULES_STATE in RULES_LOUD:
         print(json.dumps({"systemMessage":
             "outgoing-copy-gate: a NEV-SZABALY fajl hianyzik/ures "
@@ -800,6 +879,22 @@ def audit(text: str):
     return problems
 
 
+# Outbound-shaped operations of the multiplexed manage_email tool. Everything
+# else it does (search, read, labels, trash, getAttachment...) produces no text
+# of ours, so the gate must not touch it -- classifying those as sends is how
+# the sibling email gate once denied plain mailbox READS (MANAGEOP904).
+MANAGE_EMAIL_OUTBOUND_OPS = {"send", "reply", "replyall", "forward"}
+
+# Dedicated (non-multiplexed) outbound tools: the draft tools and the Gmail
+# connector's three separate send-shaped tools. Kept in step with the matcher
+# this hook is registered under in settings.json.
+EMAIL_TOOL_RE = re.compile(
+    r"(send_email|create_draft|draft_email|update_draft"
+    r"|(^|__)gmail__(reply|reply_all|send_message|forward)$)",
+    re.I,
+)
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -808,10 +903,61 @@ def main():
 
     tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
+    # A tool_input that is not a dict crashed every branch on its first .get(),
+    # which the Telegram arm then reported as an internal gate error and passed
+    # through fail-open. Measured 2026-09-05: the log holds exactly one such
+    # line, AttributeError("'int' object has no attribute 'get'"), and a payload
+    # with an integer tool_input reproduces it byte for byte. Name the real
+    # cause instead of the symptom, and keep each arm's designed failure
+    # direction: nothing of ours is readable, so Telegram (the owner's only
+    # supervision channel) still passes, email still blocks.
+    if not isinstance(tool_input, dict):
+        shape = type(tool_input).__name__
+        gated = (re.search(r"telegram.*__reply$", tool, re.I)
+                 or re.search(r"(^|__)manage_email$", tool, re.I)
+                 or EMAIL_TOOL_RE.search(tool)
+                 or tool == "Bash")
+        if not gated:
+            sys.exit(0)  # not a send: the net must never widen the gate
+        _gate_log(f"outgoing-copy-gate: a tool_input nem szotar, hanem {shape} "
+                  f"-- a vizsgalat nem futtathato (tool={tool!r}).")
+        if re.search(r"telegram.*__reply$", tool, re.I):
+            sys.exit(0)  # Telegram stays fail-open by design
+        sys.stderr.write(
+            "KIMENO-SZOVEG KAPU: TILTVA, a hivas tool_input mezoje nem szotar, hanem "
+            f"{shape} -- a kimeno szoveg igy nem olvashato ki, tehat nem vizsgalhato.\n"
+            "Fail-closed: egy vizsgalhatatlan kuldes pont a kaput utne ki. "
+            "Hivd ujra rendes parameterekkel.\n"
+        )
+        sys.exit(2)
 
-    if re.search(r"telegram.*__reply$", tool, re.I):
+    # GATECOPY828 (#1184): the scaffold wires this hook onto reply AND
+    # edit_message (an edit can replace a working code block with a broken
+    # one). The dispatch must recognise BOTH, or the edit half of the matcher
+    # invokes a hook that exits 0 without auditing anything.
+    if re.search(r"telegram.*__(reply|edit_message)$", tool, re.I):
         telegram_gate(tool_input)  # exits; never falls through
-    if re.search(r"send_email", tool, re.I):
+    # COPYGATEMATCHER904: the hook is REGISTERED for manage_email, create_draft,
+    # update_draft and the Gmail connector's reply/send_message/forward tools,
+    # but this dispatch only ever recognised a tool NAME containing
+    # "send_email" -- so on an install whose email tool is the multiplexed
+    # mcp__google-workspace__manage_email, every letter fell through to
+    # sys.exit(0) and the copy audit NEVER ran on an outgoing email. Measured
+    # 2026-09-04: an em dash in a manage_email draft body passed the gate,
+    # while the same text was blocked on the Telegram path. Same class as the
+    # email-send-gate's MANAGEOP904 fix: a multiplexer cannot be classified by
+    # its name, only by the operation it was asked to perform.
+    if re.search(r"(^|__)manage_email$", tool, re.I):
+        op = str(tool_input.get("operation") or tool_input.get("action") or "").strip().lower()
+        if op not in MANAGE_EMAIL_OUTBOUND_OPS:
+            sys.exit(0)  # search/read/labels/trash...: no outgoing text of ours
+        # A bare forward carries someone else's text and an EMPTY note: there is
+        # nothing of ours to audit, and the fail-closed "unreadable" branch below
+        # would block it for no reason.
+        if op == "forward" and not str(tool_input.get("body") or "").strip():
+            sys.exit(0)
+        text, unreadable = collect_mcp_body(tool_input), None
+    elif EMAIL_TOOL_RE.search(tool):
         text, unreadable = collect_mcp_body(tool_input), None
     elif tool == "Bash":
         cmd = str(tool_input.get("command") or "")
