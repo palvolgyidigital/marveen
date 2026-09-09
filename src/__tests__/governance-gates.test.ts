@@ -581,6 +581,8 @@ describe('telegram copy gate wiring', () => {
     const ptu = (settings.hooks as Record<string, unknown>).PreToolUse as unknown[]
     expect(JSON.stringify(ptu)).toContain('egress-gate.mjs')
     expect(ptu).toHaveLength(2)
+  })
+})
 
 // --- cimzett-gate LASSITO (second tier), added 2026-09-04 after a Zoli-intended
 // summary went to Marci's channel. The first tier looks for a CONTRADICTION
