@@ -73,8 +73,20 @@ export interface SendMailOptions {
    * The combined base64 size is capped at MAX_TOTAL_ATTACHMENT_BASE64_BYTES
    * and rejected here, before the request is built -- Graph's own limit on a
    * simple /sendMail would otherwise surface as an opaque request failure.
+   *
+   * An INLINE one (isInline + contentId) is how the official PDB signature
+   * carries its logo: the HTML references it as `<img src="cid:<contentId>">`,
+   * so the image travels WITH the letter instead of hanging off a public URL
+   * that a mail client may refuse to load.
    */
-  attachments?: { name: string; contentBytes: string; contentType?: string }[]
+  attachments?: Array<{
+    name: string
+    contentType?: string
+    /** Base64 of the file bytes (Graph wants it base64, not raw). */
+    contentBytes: string
+    isInline?: boolean
+    contentId?: string
+  }>
 }
 
 /**
@@ -273,6 +285,8 @@ export async function sendMail(options: SendMailOptions): Promise<void> {
       name: a.name,
       contentType: a.contentType ?? 'application/octet-stream',
       contentBytes: a.contentBytes,
+      ...(a.isInline ? { isInline: true } : {}),
+      ...(a.contentId ? { contentId: a.contentId } : {}),
     }))
   }
   const res = await graphFetch(`${mailboxPath()}/sendMail`, {
