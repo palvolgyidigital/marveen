@@ -97,6 +97,12 @@ const RESUBMIT_LANE_BUSY_MAX_SKIPS = 20
 // and 'error' are handled by the context-guard / stuck-tool-call-watcher so we
 // leave them alone here.
 //
+// HISTORICAL NOTE, superseded below: this paragraph describes our own 5 -> 15
+// minute raise (2026-09-07). The value that actually governs is TASK_FIRE_TIMEOUT_MS
+// = 45 minutes, adopted from upstream -- see the note above that constant. Kept
+// because the measurement that motivated it is still the reason the default is
+// generous, but do NOT read the "15 minutes" below as the live value.
+//
 // The default was 5 minutes until 2026-09-07, and it was too tight to be
 // useful: in six hours it produced four alerts (dream-engine 02:12, auchan
 // 05:35, unas-box 08:05, kanban-audit 08:05) and every one of them was false --
@@ -108,8 +114,11 @@ const RESUBMIT_LANE_BUSY_MAX_SKIPS = 20
 // owner's approval (Marci, 2026-09-07): a genuine hang is noticed ten minutes
 // later, which for these tasks costs nothing, while the false-positive traffic
 // stops. Per-task stuckAfterMinutes remains the way to say "this one legitimately
-// runs longer" (auchan and unas-box are at 30; kanban-audit, memoria-heartbeat
-// and ledger-live-drain at 20). ledger-live-drain is the instructive case: it
+// runs longer" -- but MEASURED 2026-09-08, no task-config.json anywhere under
+// ~/.claude/scheduled-tasks/ carries that field, so every task runs on the
+// default. An earlier version of this comment claimed auchan and unas-box were
+// at 30 and kanban-audit, memoria-heartbeat and ledger-live-drain at 20; those
+// overrides were never written. ledger-live-drain is the instructive case: it
 // fires every two minutes, but what the tracker measures is the agent's whole
 // turn, not the script's runtime, so under the old default it alerted whenever
 // the agent was doing real work.
