@@ -68,6 +68,20 @@ export interface SendMailOptions {
   contentType?: 'Text' | 'HTML'
   /** Persist the sent message to the mailbox Sent Items. Default true. */
   saveToSentItems?: boolean
+  /**
+   * File attachments. An INLINE one (isInline + contentId) is how the official
+   * PDB signature carries its logo: the HTML references it as
+   * `<img src="cid:<contentId>">`, so the image travels WITH the letter instead
+   * of hanging off a public URL that a mail client may refuse to load.
+   */
+  attachments?: Array<{
+    name: string
+    contentType: string
+    /** Base64 of the file bytes (Graph wants it base64, not raw). */
+    contentBytes: string
+    isInline?: boolean
+    contentId?: string
+  }>
 }
 
 export interface ListMessagesOptions {
@@ -245,6 +259,16 @@ export async function sendMail(options: SendMailOptions): Promise<void> {
     toRecipients: toRecipientList(options.to),
   }
   if (options.cc) message.ccRecipients = toRecipientList(options.cc)
+  if (options.attachments?.length) {
+    message.attachments = options.attachments.map((a) => ({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: a.name,
+      contentType: a.contentType,
+      contentBytes: a.contentBytes,
+      ...(a.isInline ? { isInline: true } : {}),
+      ...(a.contentId ? { contentId: a.contentId } : {}),
+    }))
+  }
   const res = await graphFetch(`${mailboxPath()}/sendMail`, {
     method: 'POST',
     body: JSON.stringify({ message, saveToSentItems: options.saveToSentItems ?? true }),
