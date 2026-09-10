@@ -7,6 +7,11 @@
 //   tsx scripts/graph-mail.ts headers --id <messageId> [--json]
 //   tsx scripts/graph-mail.ts send --to a@b.hu[,c@d.hu] --subject "..." --body "..." [--cc ...] [--html] [--attach FILE]
 //                                  [--signature hu|en]
+//   tsx scripts/graph-mail.ts send --to a@b.hu --subject "..." --body - < /abs/path/body.html
+//
+// `--body -` takes the body from stdin. HTML bodies MUST go this way: an inline
+// `--body '<p>..'` trips the outgoing-copy-gate, which reads the `<p>` as a shell
+// redirect and refuses the send as uninspectable.
 //
 // --attach does NOT take an arbitrary path. The file must sit inside the
 // attachment drop directory (GRAPH_MAIL_ATTACH_DIR, default
@@ -166,7 +171,14 @@ async function main(): Promise<void> {
       const attachments = attachPath ? [readAttachment(attachPath)] : undefined
       const to = flag('to')
       const subject = flag('subject')
-      const body = flag('body')
+      // `--body -` reads the body from stdin. That is the ONLY way to send an HTML
+      // letter through this CLI: the outgoing-copy-gate scans the command text for a
+      // single `<` and takes what follows for a redirect target, so an inline
+      // `--body '<p>...'` is refused with "a torzs-fajl nem olvashato (p: ...)".
+      // With `--body - < /abs/path/body.html` the gate reads the very file the CLI
+      // sends, which is what it wants to inspect. Measured 2026-09-10.
+      const bodyFlag = flag('body')
+      const body = bodyFlag === '-' ? readFileSync(0, 'utf-8') : bodyFlag
       if (!to || !subject || body === undefined) {
         console.error('send requires --to, --subject and --body')
         process.exit(2)
