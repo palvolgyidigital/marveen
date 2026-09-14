@@ -2101,7 +2101,8 @@ _notify() { # status [message]
   local msg
   case "$1" in
     warning)     msg="⚠️ Auto-update lement (${OLD_SHORT} -> ${NEW_SHORT}), a dashboard válaszol, DE kézi figyelem kell: $2" ;;
-    success)     msg="✅ Auto-update kész: ${OLD_SHORT} -> ${NEW_SHORT}. A dashboard újraindult, és válaszol (health OK)." ;;
+    # Marci, 2026-08-15: a sikeres futasrol NEM ker ertesitest, csak a hibarol.
+    success)     return 0 ;;
     rolled-back) msg="⚠️ Auto-update: a frissítés nem sikerült (a dashboard nem indult), visszaálltunk a korábbi működő verzióra (${OLD_SHORT}). Részletek: store/update.log" ;;
     *)           msg="🔴 Auto-update SIKERTELEN: a dashboard a frissítés ÉS a rollback után sem válaszol a ${PORT} porton. Kézi beavatkozás kell. Részletek: store/update.log" ;;
   esac
