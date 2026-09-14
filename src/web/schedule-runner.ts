@@ -949,11 +949,35 @@ export interface BoundChannel {
  *  deliverable by construction. Deliberately NOT falling back to
  *  ALLOWED_CHAT_ID: that is the boss's chat, and pointing a sub-agent's result
  *  there is the precise bug the old sentinel existed to avoid. */
-export function resolveBoundChannel(agentName: string): BoundChannel {
+// WRONGRECIP819 (Marci, 2026-08-19, kanban f1217c23): "first allowlist entry"
+// is a HEURISTIC, not a stated fact -- access.json has no owner field, so with
+// 2+ DM contacts a reordering silently redirects a scheduled task's result to
+// the wrong person. Measured on this host: 6 of 7 enabled sub-agent `task`
+// schedules either contradicted their own explicit recipient with a
+// wrapper-injected chat_id, or carried no real Telegram target at all and
+// still got a spurious "send this to the owner" instruction.
+//
+// An agent NEVER guesses among 2+ candidates, on ANY provider. Precedence:
+//   1. task.telegramChatId === 'none'  -> no delivery target, by design.
+//   2. task.telegramChatId set         -> that value, always (author-pinned).
+//   3. agentName is the MAIN agent     -> resolveOwnerChatId(...): the main
+//      agent's bound channel genuinely IS the owner's, by design.
+//   4. Otherwise the agent's own access.json: exactly one DM contact is
+//      unambiguous; 2+ is a guess, so the result carries ambiguousCandidates
+//      and the caller MUST skip delivery rather than pick the first.
+export function resolveBoundChannel(
+  agentName: string,
+  task?: Pick<ScheduledTask, 'telegramChatId'>,
+): BoundChannel {
   const provider = resolveAgentProvider(agentName)
-  const dir = agentName === MAIN_AGENT_ID
-    ? channelStateDir(provider)
-    : channelStateDir(provider, agentDir(agentName))
+  if (task?.telegramChatId === 'none') return { provider, chatId: null }
+  if (task?.telegramChatId) return { provider, chatId: task.telegramChatId }
+
+  if (agentName === MAIN_AGENT_ID) {
+    return { provider, chatId: resolveOwnerChatId(undefined, configuredOwnerChatFor(provider), provider) }
+  }
+
+  const dir = channelStateDir(provider, agentDir(agentName))
   try {
     const raw = JSON.parse(readFileSync(join(dir, 'access.json'), 'utf-8')) as Record<string, unknown>
     const candidates = Array.isArray(raw?.allowFrom) ? raw.allowFrom.length : 0
