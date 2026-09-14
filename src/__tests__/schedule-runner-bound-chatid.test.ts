@@ -135,11 +135,28 @@ describe('schedule-runner source contract (sentinel removed, provider-aware)', (
     expect(src).not.toMatch(/kuldd el Telegramon \(chat_id/)
   })
 
-  it('multi-entry allowlists produce an ambiguity warn (heuristic made visible)', () => {
-    // Behaviour stays first-entry; the warn exists so a reordered allowlist
-    // (2+ entries: zara/iris) cannot silently redirect task results.
-    expect(src).toContain('bound-chat resolution is ambiguous')
+  it('multi-entry allowlists are NOT resolved at all -- the agent never guesses', () => {
+    // WRONGRECIP819 (local divergence from upstream, deliberate): upstream
+    // keeps first-entry behaviour and only WARNS. A warn nobody reads still
+    // ships a colleague's report to the wrong person, so here 2+ candidates
+    // resolve to chatId:null + ambiguousCandidates and the caller SKIPS the
+    // delivery instruction instead of picking one.
     expect(src).toMatch(/candidates > 1/)
+    expect(src).toContain('ambiguousCandidates: candidates')
+    // and the old "warn, then use it anyway" contract must be gone
+    expect(src).not.toContain('bound-chat resolution is ambiguous')
+  })
+
+  it('an explicit task.telegramChatId pins the recipient, and "none" means no delivery', () => {
+    expect(src).toContain("task?.telegramChatId === 'none'")
+    expect(src).toContain('if (task?.telegramChatId) return { provider, chatId: task.telegramChatId }')
+  })
+
+  it('an ambiguous target is escalated, not just logged', () => {
+    // The caller must raise a [FELHIVAS] naming the task, so an unresolved
+    // author decision surfaces instead of sitting in a log line.
+    expect(src).toContain('bound.ambiguousCandidates')
+    expect(src).toContain('[FELHIVAS]')
   })
 
   it('resolution reads the access.json for the agent\'s own provider, not always telegram', () => {
