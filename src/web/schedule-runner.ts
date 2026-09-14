@@ -610,6 +610,11 @@ export interface BoundChannel {
   provider: ChannelProviderType
   /** The agent's own bound chat id, or null when no binding exists. */
   chatId: string | null
+  /** Set only when chatId is null BECAUSE the agent's own access.json has 2+
+   *  DM contacts and the task declared no explicit telegramChatId -- distinct
+   *  from a true config gap (missing/empty access.json), which is not an
+   *  ambiguity, just nothing to deliver to. */
+  ambiguousCandidates?: number
 }
 
 /** The agent's own bound channel + chat, or {provider, chatId:null} when no
@@ -618,26 +623,43 @@ export interface BoundChannel {
  *  deliverable by construction. Deliberately NOT falling back to
  *  ALLOWED_CHAT_ID: that is the boss's chat, and pointing a sub-agent's result
  *  there is the precise bug the old sentinel existed to avoid. */
-export function resolveBoundChannel(agentName: string): BoundChannel {
+// WRONGRECIP819 (Marci, 2026-08-19, kanban f1217c23): "first allowlist entry"
+// is a HEURISTIC, not a stated fact -- access.json has no owner field, so with
+// 2+ DM contacts a reordering silently redirects a scheduled task's result to
+// the wrong person. Measured on this host: 6 of 7 enabled sub-agent `task`
+// schedules either contradicted their own explicit recipient with a
+// wrapper-injected chat_id, or carried no real Telegram target at all and
+// still got a spurious "send this to the owner" instruction.
+//
+// An agent NEVER guesses among 2+ candidates, on ANY provider. Precedence:
+//   1. task.telegramChatId === 'none'  -> no delivery target, by design.
+//   2. task.telegramChatId set         -> that value, always (author-pinned).
+//   3. agentName is the MAIN agent     -> resolveOwnerChatId(...): the main
+//      agent's bound channel genuinely IS the owner's, by design.
+//   4. Otherwise the agent's own access.json: exactly one DM contact is
+//      unambiguous; 2+ is a guess, so the result carries ambiguousCandidates
+//      and the caller MUST skip delivery rather than pick the first.
+export function resolveBoundChannel(
+  agentName: string,
+  task?: Pick<ScheduledTask, 'telegramChatId'>,
+): BoundChannel {
   const provider = resolveAgentProvider(agentName)
-  const dir = agentName === MAIN_AGENT_ID
-    ? channelStateDir(provider)
-    : channelStateDir(provider, agentDir(agentName))
+  if (task?.telegramChatId === 'none') return { provider, chatId: null }
+  if (task?.telegramChatId) return { provider, chatId: task.telegramChatId }
+
+  if (agentName === MAIN_AGENT_ID) {
+    return { provider, chatId: resolveOwnerChatId(undefined, configuredOwnerChatFor(provider), provider) }
+  }
+
+  const dir = channelStateDir(provider, agentDir(agentName))
   try {
     const raw = JSON.parse(readFileSync(join(dir, 'access.json'), 'utf-8')) as Record<string, unknown>
-    const chosen = chatIdFromAccessConfig(raw)
-    // "First allowlist entry" is a HEURISTIC, not a stated fact: access.json
-    // has no owner field, so with 2+ entries (zara/iris today) a reordering
-    // would silently redirect scheduled-task results to another person -- the
-    // exact failure class the old sentinel guarded against, now throw-free and
-    // thus invisible. The warn turns a silent misdirection into a searchable
-    // log line; behaviour is unchanged (Marveen, msg 7002).
     const candidates = Array.isArray(raw?.allowFrom) ? raw.allowFrom.length : 0
-    if (chosen && candidates > 1) {
-      logger.warn({ agent: agentName, provider, candidates, chosen }, 'bound-chat resolution is ambiguous: multiple DM allowlist entries, using the first')
-    }
-    return { provider, chatId: chosen }
-  } catch { return { provider, chatId: null } }
+    if (candidates > 1) return { provider, chatId: null, ambiguousCandidates: candidates }
+    return { provider, chatId: chatIdFromAccessConfig(raw) }
+  } catch {
+    return { provider, chatId: null }
+  }
 }
 
 // What a scheduled task costs the shared quota pool, for the gate in
@@ -912,9 +934,23 @@ async function attemptFireTask(
       // to deliver to the wrong chat, and the warn below makes the config gap
       // visible. The system-level pending-retry alert further down uses the
       // owner chat by design.
-      const bound = resolveBoundChannel(agentName)
+      const bound = resolveBoundChannel(agentName, task)
       if (bound.chatId) {
         prefix = `[Utemezett feladat: ${task.name}] Az eredmenyt kuldd el ${channelDeliveryName(bound.provider)} (chat_id: ${bound.chatId}, reply tool). `
+      } else if (bound.ambiguousCandidates) {
+        // WRONGRECIP819: 2+ possible human contacts and no task.telegramChatId
+        // pin -- do NOT guess, on ANY provider. Delivery is skipped (bare tag,
+        // same as the config-gap branch below) but this is NOT a config gap,
+        // it is an unresolved author decision, so it gets error-level
+        // visibility plus a direct nudge to fix it, instead of a log line
+        // nobody is watching.
+        logger.error({ task: task.name, agent: agentName, provider: bound.provider, candidates: bound.ambiguousCandidates }, 'scheduled task: delivery target is ambiguous (2+ DM contacts, no task.telegramChatId) -- skipping delivery instruction instead of guessing')
+        createAgentMessage(
+          'system',
+          MAIN_AGENT_ID,
+          `[FELHIVAS] A(z) "${task.name}" utemezett feladat (agent: ${agentName}) kezbesitesi celpontja bizonytalan -- ${bound.ambiguousCandidates} lehetseges kontakt van az agens sajat ${bound.provider} access.json allowlistjeben, es a task-config.json-ban nincs telegramChatId megadva. A kezbesitesi utasitas kimaradt EBBOL a futasbol (nem tippeltunk). Toltsd ki a telegramChatId mezot (konkret chat_id, vagy "none" ha a taskot nem kell kezbesiteni) a ~/.claude/scheduled-tasks/${task.name}/task-config.json-ban.`,
+        )
+        prefix = `[Utemezett feladat: ${task.name}] `
       } else {
         logger.warn({ task: task.name, agent: agentName, provider: bound.provider }, 'scheduled task: agent has no bound channel (access.json missing/empty) -- prompt omits the delivery instruction')
         prefix = `[Utemezett feladat: ${task.name}] `
