@@ -18,7 +18,7 @@ const PROJECT_ROOT = join(__dirname, '..')
 
 // Gitignored KEY=value credentials file at the repo root. Path is overridable
 // so an operator can relocate it (e.g. outside the repo) without code changes.
-const CREDS_PATH = process.env.MARVEEN_MAIL_CREDS || join(PROJECT_ROOT, 'marveen-mail-ugyfelkod')
+const CREDS_PATH = process.env.MARVEEN_MAIL_CREDS || join(PROJECT_ROOT, 'store', '.m365-innova-credentials')
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const REQUEST_TIMEOUT_MS = 20_000
