@@ -288,8 +288,15 @@ describe('first-run gate wiring contracts', () => {
     expect(SCHEDULE_RUNNER).toMatch(/const gate = notReadyPane != null \? detectsFirstRunGate\(notReadyPane\) : null/)
   })
 
-  it("'first-run' is exempt from skipIfBusy (queued like mcp-missing, never dropped)", () => {
-    expect(SCHEDULE_RUNNER).toMatch(/result === 'first-run'[\s\S]{0,700}?insertPendingTaskRetryIfNew\(task\.name, agentName, now, 'first-run'\)/)
+  it("'first-run' is exempt from skipIfBusy (queued like mcp-missing, not dropped for being early)", () => {
+    // The optional 5th argument is the occurrence time (OUTWARD915): the row
+    // records when the run was DUE, so a staleness check can tell a task that
+    // waited 9 minutes for Claude to boot from one that has been due for
+    // hours. It does not change this contract -- a first-run gate still queues
+    // rather than drops. The one task class that can now be dropped on age is
+    // the explicitly outward-facing, non-idempotent one, where firing late
+    // overwrites what a human did meanwhile.
+    expect(SCHEDULE_RUNNER).toMatch(/result === 'first-run'[\s\S]{0,700}?insertPendingTaskRetryIfNew\(task\.name, agentName, now, 'first-run'(?:, occurrenceMs)?\)/)
   })
 
   it('the channel-monitor answers first-run dialogs instead of sending Escape', () => {

@@ -889,6 +889,16 @@ export function initDatabase(dbPathOverride?: string): void {
   // exactly (claim-before-send guard, cleared on delivery failure), just for
   // the later, bigger threshold.
   try { db.exec('ALTER TABLE pending_task_retries ADD COLUMN owner_alert_sent_at INTEGER') } catch { /* already exists */ }
+  // OUTWARD915: when this occurrence was DUE, which is not when we first tried
+  // to fire it. The two coincide on a healthy host and diverge by exactly the
+  // amount that matters here -- if the scheduler was down from 04:44 to 08:07,
+  // a 05:30 occurrence gets first_attempt=08:07 and looks 0 minutes old, while
+  // it is really 157 minutes stale. Staleness decisions must read this column;
+  // the alert thresholds keep using first_attempt, so their behaviour is
+  // unchanged. NULL on rows written before this column existed, and on the
+  // call sites that have no occurrence to speak of (a lost injection, a
+  // give-up requeue) -- readers fall back to first_attempt there.
+  try { db.exec('ALTER TABLE pending_task_retries ADD COLUMN occurrence_ms INTEGER') } catch { /* already exists */ }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS background_tasks (
@@ -3265,6 +3275,8 @@ export interface PendingTaskRetryRow {
   last_reason: string | null
   alert_sent_at: number | null
   owner_alert_sent_at: number | null
+  /** When the occurrence was DUE (OUTWARD915). NULL = unknown, use first_attempt. */
+  occurrence_ms: number | null
 }
 
 /**
@@ -3278,12 +3290,13 @@ export function insertPendingTaskRetryIfNew(
   agentName: string,
   now: number,
   reason: string,
+  occurrenceMs?: number,
 ): boolean {
   return db.prepare(`
     INSERT OR IGNORE INTO pending_task_retries
-      (task_name, agent_name, first_attempt, last_attempt, attempt_count, last_reason)
-    VALUES (?, ?, ?, ?, 1, ?)
-  `).run(taskName, agentName, now, now, reason).changes > 0
+      (task_name, agent_name, first_attempt, last_attempt, attempt_count, last_reason, occurrence_ms)
+    VALUES (?, ?, ?, ?, 1, ?, ?)
+  `).run(taskName, agentName, now, now, reason, occurrenceMs ?? null).changes > 0
 }
 
 /**

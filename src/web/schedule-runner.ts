@@ -481,6 +481,24 @@ export const DEFAULT_CATCHUP_MAX_AGE_MIN: Record<'task' | 'heartbeat' | 'command
 
 export type CatchUpDecision = 'on-time' | 'catch-up' | 'stale'
 
+// Pure: may a queued retry for an OUTWARD-FACING task still fire, or is the
+// occurrence too old to act on the outside world? Exported for the same reason
+// decideCatchUp is: the policy gets unit-tested without cron, tmux or a clock.
+//
+// `occurrence_ms` is the due time; `first_attempt` is when we first tried. On a
+// healthy host they match, and they diverge by exactly the scheduler downtime
+// -- which is the situation this guard exists for, so the due time wins and
+// first_attempt is only the fallback for rows that never recorded one.
+export function isOutwardRetryTooStale(
+  task: Pick<ScheduledTask, 'type' | 'catchUpMaxAgeMinutes' | 'outwardFacing'>,
+  row: { first_attempt: number; occurrence_ms?: number | null },
+  now: number,
+): boolean {
+  if (!task.outwardFacing) return false
+  const dueMs = row.occurrence_ms ?? row.first_attempt
+  return Math.max(0, now - dueMs) > catchUpMaxAgeMs(task)
+}
+
 /** Resolved staleness budget for a task, in ms (Infinity = always catch up). */
 export function catchUpMaxAgeMs(task: Pick<ScheduledTask, 'type' | 'catchUpMaxAgeMinutes'>): number {
   const configured = task.catchUpMaxAgeMinutes
@@ -1706,6 +1724,51 @@ export function startScheduleRunner(): NodeJS.Timeout {
       const key = `${row.task_name}@${row.agent_name}`
       pendingKeys.add(key)
 
+      // OUTWARD915. The retry queue never abandons a row: a busy-skipped task
+      // waits for the session to free up, however long that takes. That policy
+      // exists because silently dropping a morning report was the worse bug,
+      // and for reporting tasks it is still right -- a late summary is useful.
+      //
+      // For a task that acts on the OUTSIDE world and is not idempotent, the
+      // sign flips: a late upload does not arrive late, it OVERWRITES whatever
+      // happened meanwhile. Measured 2026-09-15: the 05:30 Auchan stock upload
+      // re-fired from this queue at 08:16, 166 minutes late, while a human was
+      // deciding whether to upload by hand. Nothing here checked the age --
+      // decideCatchUp is consulted by the cron scan below and by nothing else,
+      // so the same task obeyed two opposite policies depending on which entry
+      // point reached it.
+      //
+      // Opt-in by design (Marci's call, 2026-09-15): flagging the task rather
+      // than changing the queue's policy wholesale, because applying a budget
+      // to every row would re-introduce the exact bug the queue was built to
+      // fix. Flagged tasks reuse the cron path's own budget, so the two paths
+      // finally agree; unflagged tasks are untouched.
+      //
+      // On expiry we record 'missed' and alert, then DROP the row: keeping it
+      // would re-evaluate as stale on every 60s tick forever. This mirrors the
+      // cron path, which also records 'missed' and moves on. A human decides
+      // what to do -- that is the point, since only a human knows whether the
+      // outside world still needs this.
+      if (isOutwardRetryTooStale(taskDef, row, now)) {
+        const dueMs = row.occurrence_ms ?? row.first_attempt
+        logger.warn(
+          {
+            task: row.task_name,
+            agent: row.agent_name,
+            ageMinutes: Math.round(Math.max(0, now - dueMs) / 60000),
+            maxAgeMinutes: Math.round(catchUpMaxAgeMs(taskDef) / 60000),
+            attempts: row.attempt_count,
+            measuredFrom: row.occurrence_ms == null ? 'first_attempt' : 'occurrence',
+          },
+          'outward-facing retry is too stale to fire -- recording as missed and dropping the row',
+        )
+        appendTaskRun(row.task_name, row.agent_name, 'missed')
+        deletePendingTaskRetry(row.task_name, row.agent_name)
+        pendingKeys.delete(key)
+        sendPendingRetryMainAgentNotice(toPendingRetryView(row, now), now)
+        continue
+      }
+
       // Re-run pre-check on retry: state may have changed since the task
       // was first scheduled (e.g. kanban cards already processed).
       const retryPc = runPreCheck(taskDef)
@@ -1921,7 +1984,7 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // NOT drop it (that flag is for genuinely-busy short-cadence tasks;
           // here we deliberately woke the agent for its scheduled run). The
           // pending-retry loop then sends as soon as Claude has booted.
-          insertPendingTaskRetryIfNew(task.name, agentName, now, 'starting')
+          insertPendingTaskRetryIfNew(task.name, agentName, now, 'starting', occurrenceMs)
         } else if (result === 'busy') {
           // A forceSend task only ever reports 'busy' from the context-
           // saturation deferral inside attemptFireTask -- every other busy
@@ -1943,20 +2006,20 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // First encounter -- insert a new pending row. If somehow a
           // row already exists (race with a just-cancelled retry), do
           // nothing so the cancel wins the tiebreak.
-          insertPendingTaskRetryIfNew(task.name, agentName, now, 'busy')
+          insertPendingTaskRetryIfNew(task.name, agentName, now, 'busy', occurrenceMs)
         } else if (result === 'mcp-missing') {
           // Deliberately NOT honoring skipIfBusy here: dropping a tick because
           // a required MCP is dead would be exactly the silent starvation this
           // pre-check exists to eliminate. The retry row keeps the task alive
           // until the server returns, and the alert names the dead server.
-          insertPendingTaskRetryIfNew(task.name, agentName, now, mcpMissingReason(task.name, agentName))
+          insertPendingTaskRetryIfNew(task.name, agentName, now, mcpMissingReason(task.name, agentName), occurrenceMs)
         } else if (result === 'first-run') {
           // Also exempt from skipIfBusy: a session parked on a first-run
           // dialog (fresh install) never frees up between ticks the way a
           // busy one does, so dropping ticks would starve the task with no
           // trace. The retry row keeps it alive and the aged alert names the
           // actual blocker instead of a generic "busy".
-          insertPendingTaskRetryIfNew(task.name, agentName, now, 'first-run')
+          insertPendingTaskRetryIfNew(task.name, agentName, now, 'first-run', occurrenceMs)
         }
       }
     }
