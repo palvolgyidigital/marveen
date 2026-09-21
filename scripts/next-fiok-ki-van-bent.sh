@@ -1,5 +1,17 @@
 #!/bin/bash
-# Ki hasznalja EPP MOST a kozos Next-fiokot?
+# Melyik agens hasznal EPP MOST BONGESZOT? (NEM ugyanaz, mint "ki van bent a Nexten")
+#
+# A NEV FELREVEZET, ES EZ MA KART OKOZOTT (2026-09-16). A szkript `pgrep`-pel BARMILYEN
+# chromium/xvfb folyamatot megtalal, es az agens-MAPPA alapjan cimkezi. NEM nezi meg,
+# hogy az a bongeszo a Nexten, a UNAS adminon vagy barhol mashol jar.
+# Merve: Sam egesz delutan a UNAS admin feluleten dolgozott, es ez a szkript vegig
+# "AGENS: sam"-et irt ki a "Ki van bent a kozos Next-fiokon" cim alatt. Max emiatt
+# tobbszor feleslegesen varakozott, Pedro pedig egy hibas "Sam van bent a Nexten"
+# allitast adott tovabb a tulajdonosnak, es ennek alapjan kerte Samet, hogy adja at a
+# fiokot, amiben nem is volt bent.
+# A kimenet ezert mostantol azt mondja, amit tenylegesen mer. A cel-oldal felismerese
+# (melyik rendszerrel dolgozik az a bongeszo) NINCS megoldva, es amig nincs MERVE,
+# addig ne is allitsuk, hogy meg van.
 #
 # MIERT LETEZIK: 2026-08-31-en bizonyitottuk (memoria 826), hogy ket agens
 # parhuzamos sessionje a kozos Next-fiokon elrontja a masodikat -- a navigacio
@@ -46,15 +58,24 @@ done | sort -u > /tmp/.next-users.$$
 # Ezert soronkent szamolunk, nem a -c kapcsoloval.
 n=$(pgrep -f "chrome-linux64|chrome-headless-shell|xvfb-run" 2>/dev/null | wc -l | tr -d " ")
 [ -z "$n" ] && n=0
-echo "=== Ki van bent a kozos Next-fiokon ==="
+echo "=== Melyik agens hasznal eppen bongeszot ==="
 if [ -s /tmp/.next-users.$$ ]; then
-  while read -r a; do echo "  AGENS: $a"; done < /tmp/.next-users.$$
+  while read -r a; do echo "  BONGESZOT HASZNAL: $a"; done < /tmp/.next-users.$$
   echo "  (osszesen $n bongeszo-folyamat)"
   echo
-  echo "MAS VAN BENT -> NE LEPJ BE. Varj, amig a lista ures."
-elif [ "$n" -gt 0 ]; then
-  echo "  $n folyamat fut, de egyik sem agens-mappabol -- valoszinuleg pedro sajat futtatasa"
+  echo "FIGYELEM: ez NEM jelenti, hogy az illeto a NEXTEN van. Ez a szkript barmilyen"
+  echo "bongeszot lat (Next, UNAS admin, Allegro, barmi mas). Ha a Next-fiokra van szukseged,"
+  echo "KERDEZD MEG az erintett agenst, hogy a Nexten dolgozik-e. Ne varj vakon, es ne is"
+  echo "lepj be vakon."
 else
-  echo "  senki, a fiok SZABAD -> mehetsz"
+  if [ "$n" -gt 0 ]; then
+    echo "  $n folyamat fut, de egyik sem agens-mappabol -- valoszinuleg pedro sajat futtatasa"
+  else
+    echo "  egyetlen agens sem hasznal bongeszot"
+  fi
+  echo
+  echo "Egyetlen agens sem hasznal bongeszot, tehat a Next-fiokot sem tartja senki a flottabol."
+  echo "(Ez az EGYETLEN irany, amiben ez a szkript biztosat mond: a nulla talalat nemleges valasz,"
+  echo "a talalat viszont nem allitas a Nextrol.)"
 fi
 rm -f /tmp/.next-users.$$
