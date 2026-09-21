@@ -431,9 +431,23 @@ export function readScheduledTask(taskName: string): ScheduledTask | null {
   const { name, description, body } = parseSkillMdFrontmatter(skillContent)
 
   let config: { schedule?: string; agent?: string; enabled?: boolean; createdAt?: number; type?: string; skipIfBusy?: boolean; requiresDesktop?: boolean; forceSend?: boolean; targetSession?: string; description?: string; command?: string; timeoutMs?: number; failThreshold?: number; preCheck?: string; catchUpMaxAgeMinutes?: unknown; stuckAfterMinutes?: unknown; requires?: { mcp_servers?: unknown }; injectMetrics?: unknown; sendDigestDirect?: unknown; telegramChatId?: string; channelProvider?: unknown; once?: unknown; onceDisabledAt?: unknown; telegramTopic?: unknown } = {}
+  // A HIANYZO config legitim (a readFileOr '{}'-t ad, az alapertelmezesek ervenyesek).
+  // A SERULT config NEM: a JSON.parse dobasa utan a defaultok ATVESZIK a feladatot, es azok
+  // nem semlegesek -- `agent` -> MAIN_AGENT_ID (a feladat atszall a fo-agensre), `schedule` ->
+  // '0 9 * * *' (mas idopont, es mar nem is heti), `enabled` -> true, `type` -> 'task' (kifele
+  // hato ag), `telegramChatId` -> undefined (a kituzott cimzett eltunik). Egy vesszohiba tehat
+  // pontosan azt a negy mezot allitja at, ami a kezbesitest meghatarozza, es kozben a feladat
+  // a listaban marad, engedelyezve: a kep megegyezik egy rendben levo rendszerevel.
+  // Max merte ki 2026-09-21-en, es a javitas az o javaslata: egy elromlott konfigu feladatot
+  // NEM futtatni biztonsagosabb, mint idegen alapertelmezesekkel futtatni.
+  let configSerult = false
   try {
     config = JSON.parse(configBuf != null ? configBuf.toString('utf-8') : '{}')
-  } catch { /* use defaults */ }
+  } catch (e) {
+    configSerult = true
+    console.error(`[scheduled-tasks] SERULT task-config.json: ${taskName} -- ${(e as Error).message}. ` +
+      `A feladat LETILTVA marad, amig a fajl nincs javitva (a defaultok atirnak agenst, idopontot es cimzettet).`)
+  }
   if (config === null || typeof config !== 'object') config = {}
 
   const { contentHash, preCheckSha256, dirFiles } = scheduledTaskHashFromFiles(dir, skillBuf, configBuf)
@@ -444,7 +458,7 @@ export function readScheduledTask(taskName: string): ScheduledTask | null {
     prompt: body,
     schedule: config.schedule || '0 9 * * *',
     agent: config.agent || MAIN_AGENT_ID,
-    enabled: config.enabled !== false,
+    enabled: configSerult ? false : config.enabled !== false,
     createdAt: config.createdAt || 0,
     type: (config.type as 'task' | 'heartbeat' | 'command') || 'task',
     skipIfBusy: config.skipIfBusy === true,
