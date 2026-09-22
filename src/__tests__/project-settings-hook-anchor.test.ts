@@ -95,6 +95,10 @@ const EXPECTED: Record<string, string[]> = {
     // in double quotes, $( ) in an inline interpreter payload, ...). Fail-open on
     // any internal error, so it cannot wedge a session.
     'shell-rescan-guard.py @ Bash',
+    // Marveen-oldali kapuk, az upstream 'szkript @ matcher' alakjaban. A matcherek
+    // a .claude/settings.json-ban beallitottakkal egyeznek.
+    'uzenet-hossz-gate.py @ mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message',
+    'interagent-ekezet-gate.py @ Bash',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],
