@@ -8,6 +8,7 @@ import { MAIN_AGENT_ID, ALLOWED_CHAT_ID, OLLAMA_URL, MEMORY_IMPORT_CATEGORIZE_MO
 import { logger } from '../../logger.js'
 import { readBody, json, jsonMaybeGzip } from '../http-helpers.js'
 import { detectHomoglyphs, formatHomoglyphWarning } from '../../homoglyph.js'
+import { checkMemoryPutFields } from '../memory-put-fields.js'
 import type { HybridSearchTrace } from '../../db.js'
 import type { RouteContext } from './types.js'
 
@@ -348,11 +349,21 @@ Respond ONLY with JSON, nothing else:
   if (memUpdateMatch && (method === 'PUT' || method === 'PATCH')) {
     const id = parseInt(memUpdateMatch[1], 10)
     const body = await readBody(req)
+    const parsed = JSON.parse(body.toString())
+    // eb063e6c / CSEND-2026-09-26: an unrecognised field used to be silently
+    // dropped and the call still answered 200 -- reject it loudly instead, same
+    // rule as checkAgentPutFields and the kanban PUT (#1023), before anything
+    // is read or written.
+    const fieldCheck = checkMemoryPutFields(parsed)
+    if (!fieldCheck.ok) {
+      json(res, { error: fieldCheck.message }, 400)
+      return true
+    }
     // MEMIRASNYOM915: updated_by is the writer's self-reported identity for
     // the write-trace. It is distinct from agent_id, which means "reassign
     // the row to this agent" -- an editor updating someone else's memory
     // attributes the WRITE without changing the OWNER.
-    const { content, category, tier, agent_id, keywords, updated_by } = JSON.parse(body.toString()) as { content?: string; category?: string; tier?: string; agent_id?: string; keywords?: string; updated_by?: string }
+    const { content, category, tier, agent_id, keywords, updated_by } = parsed as { content?: string; category?: string; tier?: string; agent_id?: string; keywords?: string; updated_by?: string }
     const newCategory = (tier || category || '').toLowerCase() || undefined
     if (newCategory && !MEMORY_CATEGORIES.has(newCategory)) {
       json(res, { error: `Invalid category "${newCategory}". Allowed: ${[...MEMORY_CATEGORIES].join(', ')}` }, 400)
