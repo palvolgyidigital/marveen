@@ -160,3 +160,10 @@ supabase/.temp
 
 # Install-local hook scripts named by store/extra-hooks.json (docs/config-reference.md)
 local-hooks/
+
+# Kezi biztonsagi mentesek egy fajl atirasa elott (pl. CLAUDE.md.bak-2026-09-18-...,
+# interagent-ekezet-gate.py.bak-2026-09-21). Az ugynokok minden kockazatos szerkesztes
+# elott ilyet keszitenek; ezek helyi, egyszer hasznalatos allapotok, nem forras.
+# 2026-09-22-ig ezek kovetetlenul alltak a fan, es EMIATT allt meg a napi upstream-sync
+# ot ejszakan at -- a blokkolo nem idegen valtozas volt, hanem a sajat mentéseink.
+*.bak-*
