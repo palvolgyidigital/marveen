@@ -110,6 +110,10 @@ const EXPECTED: Record<string, string[]> = {
     // internal error and bounded (two stops in a row, then the call passes),
     // so it cannot silence the channel or trap a session.
     'googlechat-thread-guard.py @ mcp__plugin_googlechat_googlechat__reply',
+    // Marveen-oldali kapuk, az upstream 'szkript @ matcher' alakjaban. A matcherek
+    // a .claude/settings.json-ban beallitottakkal egyeznek.
+    'uzenet-hossz-gate.py @ mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message',
+    'interagent-ekezet-gate.py @ Bash',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
   StopFailure: ['ledger-turn-failure.py'],
