@@ -20,7 +20,7 @@ import { detectLanIp } from './web/network-info.js'
 import { AGENTS_BASE_DIR, listAgentNames, listAllAgentNames } from './web/agent-config.js'
 import { forEachAgentIsolated } from './web/agent-seed-loop.js'
 import { ensureRotationHeartbeatTask } from './web/claude-rotation-heartbeat.js'
-import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureMainScopeBashEgressParser, ensureGovernanceGateCommands, ensureTelegramCopyGate, ensureChildClaudeGuard, ensureWebSearchEnvelope, ensureExtraHookEntries, ensureQuarantineReader, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureAgentIdHeaderSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureBackgroundCheckpointSection, ensureMessageDedupGuardHook, ensureCimzettGate, ensureTudastagadasGate } from './web/agent-scaffold.js'
+import { ensureAgentHooks, ensureProjectRootInClaudeMd, ensureAgentStalenessHook, ensureAgentProvenanceHook, ensureEgressGate, ensureBashEgressDeny, ensureBashEgressParser, ensureMainScopeBashEgressParser, ensureGovernanceGateCommands, ensureTelegramCopyGate, ensureChildClaudeGuard, ensureWebSearchEnvelope, ensureExtraHookEntries, ensureQuarantineReader, watchEgressAllowlistForReaderRender, ensureDefaultScheduledTasks, agentSettingsPath, ensureAutonomySection, ensureSkillsPathTrapSection, ensureSystemDirectiveAuthSection, ensureAgentIdHeaderSection, ensureMemorySearchLabelSection, ensureFleetAuthSection, ensureEvidenceSection, ensureMcpListChannelSection, ensureMessageCloseSection, ensureBackgroundCheckpointSection, ensureMessageDedupGuardHook, ensureCimzettGate, ensureTudastagadasGate, ensureInteragentEkezetGate, ensureUzenetHosszGate } from './web/agent-scaffold.js'
 import { shouldRegisterHooks, pruneStaleHooksFromSettingsFile } from './web/hook-registration-guard.js'
 import { mainAgentConfigDirIfSeparate } from './web/agent-process.js'
 import { refreshMarveenBotUsername } from './web/telegram.js'
@@ -687,6 +687,8 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
       const dedupPatched: string[] = []
       const cimzettPatched: string[] = []
       const tudastagadasPatched: string[] = []
+      const ekezetPatched: string[] = []
+      const hosszPatched: string[] = []
       // Include the main agent (MAIN_AGENT_ID) so the voice hook is also seeded
       // into ~/.claude/settings.json alongside existing hooks (e.g. telegram_progress.py).
       // listALLAgentNames, not listAgentNames (HBGATEWIRE826): the
@@ -721,6 +723,8 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
         if (ensureBashEgressParser(agentName)) bashParserPatched.push(agentName)
         if (ensureCimzettGate(agentName)) cimzettPatched.push(agentName)
         if (ensureTudastagadasGate(agentName)) tudastagadasPatched.push(agentName)
+        if (ensureInteragentEkezetGate(agentName)) ekezetPatched.push(agentName)
+        if (ensureUzenetHosszGate(agentName)) hosszPatched.push(agentName)
         if (ensureGovernanceGateCommands(agentName)) govPatched.push(agentName)
         if (ensureTelegramCopyGate(agentName)) copyGatePatched.push(agentName)
         if (ensureChildClaudeGuard(agentName)) childGuardPatched.push(agentName)
@@ -756,6 +760,8 @@ setInterval(() => { try { sweepExpiredDesktopLock() } catch { /* never kill the 
       if (bashParserPatched.length) logger.info({ patched: bashParserPatched }, 'bash-egress-parser Bash hook backfilled into agent settings.json (EGRESSPARSER923)')
       if (cimzettPatched.length) logger.info({ patched: cimzettPatched }, 'cimzett-gate Telegram-reply hook backfilled into agent settings.json')
       if (tudastagadasPatched.length) logger.info({ patched: tudastagadasPatched }, 'tudastagadas-gate Telegram-reply hook backfilled into agent settings.json')
+      if (ekezetPatched.length) logger.info({ patched: ekezetPatched }, 'interagent-ekezet-gate Bash hook backfilled into agent settings.json')
+      if (hosszPatched.length) logger.info({ patched: hosszPatched }, 'uzenet-hossz-gate Telegram-reply hook backfilled into agent settings.json')
       if (govPatched.length) logger.info({ patched: govPatched }, 'governance gate hook commands upgraded to absolute node path in agent settings.json')
       if (copyGatePatched.length) logger.info({ patched: copyGatePatched }, 'outgoing-copy-gate wired onto the Telegram send tools in agent settings.json (GATECOPY828)')
       if (childGuardPatched.length) logger.info({ patched: childGuardPatched }, 'child-claude channel guard wired onto Bash in agent settings.json (CHILDCLAUDEPOLLER1010)')
