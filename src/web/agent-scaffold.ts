@@ -689,6 +689,8 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   if (agentGetsBashEgressParser(name)) injectBashEgressParser(existing)
   injectCimzettGate(existing)
   injectTudastagadasGate(existing)
+  injectInteragentEkezetGate(existing)
+  injectUzenetHosszGate(existing)
   atomicWriteFileSync(settingsPath, JSON.stringify(existing, null, 2))
 }
 
@@ -1340,6 +1342,95 @@ export function ensureTudastagadasGate(name: string): boolean {
   if (ptuJson.includes('tudastagadas-gate.py') && hookCommandWired(ptuJson, command)) return false
   if (isUnsafeHookCommand(command)) return false
   injectTudastagadasGate(settings)
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
+// Idempotently wire the interagent-ekezet-gate PreToolUse hook (blocks
+// accentless Hungarian, Cyrillic/Greek homoglyphs, and em dashes on direct
+// curl calls to /api/messages, /api/memories, /api/daily-log and
+// /api/kanban). Registered so far only in the checkout's own project
+// settings (51a9da6); TGSABLONHOOK921's seeding-vs-checkout split correctly
+// flagged that every OTHER agent -- Bob included -- was starting without it.
+// Same dedupe shape as the other gate injectors.
+export function injectInteragentEkezetGate(existing: Record<string, unknown>): void {
+  const hooks = (existing.hooks && typeof existing.hooks === 'object'
+    ? existing.hooks
+    : (existing.hooks = {})) as Record<string, unknown>
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'interagent-ekezet-gate.py'))
+  if (isUnsafeHookCommand(command)) return
+  const entry = {
+    matcher: 'Bash',
+    hooks: [{ type: 'command', command, timeout: 10 }],
+  }
+  const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
+  hooks.PreToolUse = [
+    ...prev.filter((e) => !JSON.stringify(e).includes('interagent-ekezet-gate.py')),
+    entry,
+  ]
+}
+
+// Idempotent migration: ensure every agent's settings.json carries the
+// interagent-ekezet-gate hook, same startup-migration shape as
+// ensureCimzettGate.
+export function ensureInteragentEkezetGate(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'interagent-ekezet-gate.py'))
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  const ptuJson = JSON.stringify(ptu)
+  if (ptuJson.includes('interagent-ekezet-gate.py') && hookCommandWired(ptuJson, command)) return false
+  if (isUnsafeHookCommand(command)) return false
+  injectInteragentEkezetGate(settings)
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
+// Idempotently wire the uzenet-hossz-gate PreToolUse hook (enforces the
+// per-recipient Telegram reply length limit). Same registration gap and same
+// fix as injectInteragentEkezetGate above (51a9da6 wired it checkout-only).
+export function injectUzenetHosszGate(existing: Record<string, unknown>): void {
+  const hooks = (existing.hooks && typeof existing.hooks === 'object'
+    ? existing.hooks
+    : (existing.hooks = {})) as Record<string, unknown>
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'uzenet-hossz-gate.py'))
+  if (isUnsafeHookCommand(command)) return
+  const entry = {
+    matcher: 'mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message',
+    hooks: [{ type: 'command', command, timeout: 10 }],
+  }
+  const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
+  hooks.PreToolUse = [
+    ...prev.filter((e) => !JSON.stringify(e).includes('uzenet-hossz-gate.py')),
+    entry,
+  ]
+}
+
+// Idempotent migration: ensure every agent's settings.json carries the
+// uzenet-hossz-gate hook, same startup-migration shape as ensureCimzettGate.
+export function ensureUzenetHosszGate(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const command = hookCommand(join(PROJECT_ROOT, 'scripts', 'hooks', 'uzenet-hossz-gate.py'))
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  const ptuJson = JSON.stringify(ptu)
+  if (ptuJson.includes('uzenet-hossz-gate.py') && hookCommandWired(ptuJson, command)) return false
+  if (isUnsafeHookCommand(command)) return false
+  injectUzenetHosszGate(settings)
   if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
   atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
   return true
