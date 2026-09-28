@@ -185,14 +185,21 @@ async function main(): Promise<void> {
       }
       const signature = flag('signature')
       const signed = signature ? withSignature(signature, body) : undefined
+      // ATTACHDUPE925: this object literal used to carry `attachments` TWICE --
+      // the user's `--attach` file first, then `signed?.attachments` (the
+      // signature's inline logo). In JS the LAST key wins, so `--attach` was
+      // silently dropped on every signed letter, with no error and an exit 0.
+      // Measured live 2026-09-25: the letter arrived at marketing@ with
+      // hasAttachments=false and only hu-logo.png (isInline) on it. The two
+      // lists are independent, so they must be CONCATENATED, not overwritten.
+      const allAttachments = [...(attachments ?? []), ...(signed?.attachments ?? [])]
       await sendMail({
-        attachments,
         to: to.split(','),
         subject,
         body: signed ? signed.content : body,
         cc: flag('cc')?.split(','),
         contentType: signed || has('html') ? 'HTML' : 'Text',
-        attachments: signed?.attachments,
+        attachments: allAttachments.length > 0 ? allAttachments : undefined,
       })
       console.log(`sent to ${to}`)
       break
