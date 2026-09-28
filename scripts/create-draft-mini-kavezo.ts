@@ -48,8 +48,8 @@ const body = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;
 <table cellpadding="0" cellspacing="0" border="0" style="margin-top:26px;border-top:1px solid #e2e2e2;padding-top:14px;font-family:Arial,Helvetica,sans-serif">
  <tr><td style="font-size:14px;color:#222;line-height:1.35;padding-bottom:8px">Üdv,<br><strong>PDB</strong></td></tr>
  <tr><td style="font-size:11px;line-height:1.35;color:#404040">
-   <a href="https://www.google.com/maps/place/47%C2%B031'10.7%22N+19%C2%B011'31.1%22E/@47.519644,19.19196,572m" style="color:#0563C1;text-decoration:underline">1165 Budapest, Margit utca 114., Ikarus gyár, 44/6 épület</a><br>
-   <strong style="font-size:12px">+36 70 611 70 78 &nbsp;|&nbsp; +36 30 550 70 75</strong><br>
+   <a href="https://www.google.com/maps/place/47%C2%B031'10.7%22N+19%C2%B011'31.1%22E/@47.519644,19.19196,572m" style="color:#0563C1;text-decoration:underline">1165 Budapest, Margit utca 114., Ikarus park, 44/6 épület</a><br>
+   <strong style="font-size:12px">+36 30 550 70 75</strong><br>
    <span style="font-size:13px">
      <a href="http://www.pdb.hu/" style="color:#BF8F00;text-decoration:none">PDB</a> &nbsp;|&nbsp;
      <a href="https://www.facebook.com/pdb.hu/" style="color:#BF8F00;text-decoration:none">Facebook</a> &nbsp;|&nbsp;
