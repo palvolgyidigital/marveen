@@ -132,16 +132,6 @@ export interface ScheduledTask {
   // target session before injecting the prompt; a dead server defers the task
   // with a reasoned alert instead of a silent runtime failure.
   requires?: { mcp_servers?: string[] }
-  // Explicit Telegram delivery target for this task's result (WRONGRECIP819).
-  // Unset means "resolve it automatically" -- safe only when the agent's own
-  // channel access.json has exactly one DM contact; with 2+ contacts the
-  // runner will no longer guess (see resolveBoundChannel in
-  // schedule-runner.ts). A real chat_id string pins the exact recipient,
-  // overriding any allowlist-order heuristic. The literal string "none" means
-  // this task has NO direct Telegram recipient at all (e.g. its result goes
-  // out as an inter-agent message, or it is a self-only reminder) -- the
-  // runner omits the Telegram delivery instruction entirely, no warning.
-  telegramChatId?: string
   // type='heartbeat' only (HBMETRICSWIRE910): the runner executes
   // scripts/heartbeat-metrics.sh at prompt-build time and appends its output
   // PRE-RENDERED in final report form to the prompt. The receiving round
@@ -231,7 +221,6 @@ export function readScheduledTask(taskName: string): ScheduledTask | null {
     catchUpMaxAgeMinutes: parseCatchUpMaxAge(config.catchUpMaxAgeMinutes),
     stuckAfterMinutes: parseFiniteMinutes(config.stuckAfterMinutes),
     requires: parseRequires(config.requires),
-    telegramChatId: typeof config.telegramChatId === 'string' && config.telegramChatId.trim() ? config.telegramChatId.trim() : undefined,
     injectMetrics: config.injectMetrics === true,
     telegramChatId: typeof config.telegramChatId === 'string' && config.telegramChatId.trim() ? config.telegramChatId.trim() : undefined,
   }
@@ -310,7 +299,6 @@ export function writeScheduledTask(
   if (data.preCheck !== undefined) config.preCheck = data.preCheck
   if (data.catchUpMaxAgeMinutes !== undefined) config.catchUpMaxAgeMinutes = data.catchUpMaxAgeMinutes
   if (data.stuckAfterMinutes !== undefined) config.stuckAfterMinutes = data.stuckAfterMinutes
-  if (data.telegramChatId !== undefined) config.telegramChatId = data.telegramChatId
   if (data.injectMetrics !== undefined) config.injectMetrics = data.injectMetrics
   if (data.telegramChatId !== undefined) config.telegramChatId = data.telegramChatId
   if (data.description !== undefined) config.description = data.description

@@ -51,7 +51,18 @@ const RECIPE_PRINTERS: Record<string, string> = {
   'scripts/hooks/memory-lookup-nudge.py':
     'on a human message it prints the search recipe; the agent runs it and picks the keyword (TG 16727)',
 }
-const isExemptPrinter = (rel: string) => rel in RECIPE_PRINTERS
+
+// A DIFFERENT shape of benign mention: a defensive gate that carries the
+// endpoint path as one entry in a match-list it inspects OUTGOING Bash calls
+// against (to block them), never as a target it calls itself. This is not a
+// RECIPE_PRINTERS case -- these gates do real I/O (read an override file, log
+// a line) -- so they get their OWN, narrower purity check below: no actual
+// network-call primitive anywhere, rather than "no side-effecting word at all".
+const BLOCKLIST_GATES: Record<string, string> = {
+  'scripts/hooks/interagent-ekezet-gate.py':
+    'the path is a string entry in a Bash tool_input match-list the gate blocks accentless outgoing text against; it inspects the call, it never issues one',
+}
+const isExemptPrinter = (rel: string) => rel in RECIPE_PRINTERS || rel in BLOCKLIST_GATES
 
 // Each mention of the endpoint, with the curl command it sits in (same line), or
 // the bare line when no curl precedes it there.
@@ -127,6 +138,17 @@ describe('...and that stays true (update the scaffold sentence if one of these f
     const src = readFileSync(join(ROOT, rel), 'utf-8')
     expect(src).toMatch(/api\/memories/) // stale-exemption guard: drop the entry when this stops holding
     expect(src).not.toMatch(/urlopen|urllib|http\.client|HTTPConnection|(?:from|import)\s+http\b|httplib|socket|sqlite3|subprocess|\brequests\b|os\.system|os\.popen|os\.exec|os\.spawn|popen|__import__|importlib|asyncio|open_connection|\b(?:exec|eval|compile)\s*\(/)
+  })
+
+  // A BLOCKLIST_GATES entry is allowed the ordinary run of a hook script (file
+  // I/O, subprocess for its OWN purposes, a shared module import) -- the bar is
+  // narrower and more direct: it may never itself be the thing that ISSUES a
+  // request to the endpoint. A real network-call primitive anywhere in the
+  // file would mean the gate reaches the network it is supposed to only judge.
+  it.each(Object.keys(BLOCKLIST_GATES))('exempt %s never issues a network call itself', (rel) => {
+    const src = readFileSync(join(ROOT, rel), 'utf-8')
+    expect(src).toMatch(/api\/memories/) // stale-exemption guard: drop the entry when this stops holding
+    expect(src).not.toMatch(/urlopen|urllib\.request|http\.client|HTTPConnection|(?:from|import)\s+http\b|httplib|\brequests\b|open_connection/)
   })
 })
 
