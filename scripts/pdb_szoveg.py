@@ -33,15 +33,35 @@ IDEGEN_TARTOMANY = (0x370, 0x4FF)
 
 # Ekezet nelkulre csupaszitott, magyar szovegben gyakori toredekek. Mindegyik olyan, ami
 # ANGOL szoveget nem talal el (nem angol szo es nem angol szo resze).
+# IGEKOTO-ELOTAG, HOZZAADVA 2026-09-29, MERT A `\b` HORGONY MIATT MINDEN ELOTAGOS IGEALAK ATCSUSZOTT.
+# MERT ESET: Sam napi-naplo sablonjaban a "Kikuldve Zolinak ... Telegram uzenet-azonosito" szoveg
+# NULLA mintat talalt el, mert a "kuld" nem szohatáron all a "Kikuldve"-ben. A magyar operativ
+# szokincs tobbsege elotagos (kikuldve, megkerdezte, elkeszult, visszakuldve, atadtam), tehat ez
+# nem szelso eset, hanem a tobbseg. A sablon igy hetekig ekezet nelkuli bejegyzeseket termelt.
+# MERES A VALTOZTATAS ELOTT: 174 angol bekezdes a sajat skill- es doc-fajljainkbol, ZERO valodi
+# angol hamis pozitiv (a harom megfogott mind ekezet nelkuli MAGYAR volt, tehat helyes talalat).
+# A memoria-korpuszon (1520 rekord) az uj mintak 39 tovabbi, valodi ekezettelen magyart fogtak meg.
+_IGEKOTO = r"(?:ki|meg|be|el|fel|le|at|ossze|vissza|szet|ra|ide|oda|elo)?"
+
 CSUPASZ = [
-    r"\bkesz\w*", r"\bkuld\w*", r"\bkerd\w*", r"\bdont\w*", r"\bkerem\b", r"\bkeres\w*",
+    r"\b" + _IGEKOTO + r"kesz\w*", r"\b" + _IGEKOTO + r"kuld\w*",
+    r"\b" + _IGEKOTO + r"kerd\w*", r"\b" + _IGEKOTO + r"dont\w*",
+    r"\bkerem\b", r"\b" + _IGEKOTO + r"keres\w*",
     r"\bertek\w*", r"\bertesit\w*", r"\bellenoriz\w*", r"\bmeres\w*", r"\bmert\b",
     r"\btovabb\w*", r"\bhataride\w*", r"\bjelolo\w*", r"\bkovetkezo\w*", r"\bszukseg\w*",
     r"\bvalasz\w*", r"\bhianyz\w*", r"\bkulon\w*", r"\bidopont\w*", r"\bugyn?el?\w*",
     r"\bmegkap\w*", r"\bteny\w*", r"\bfontos\b", r"\baltalab\w*", r"\bblokkol\w*",
     r"\bkiment\b", r"\berkez\w*", r"\bcimzett\w*", r"\bszamla\w*", r"\bhonap\w*",
     r"\btermek\w*", r"\bmukod\w*", r"\bjavit\w*", r"\bhasznal\w*", r"\bmodosit\w*",
-    r"\btortent\w*", r"\blezar\w*", r"\brogzit\w*", r"\bmegoldas\w*", r"\bnegyedev\w*",
+    r"\btortent\w*", r"\b" + _IGEKOTO + r"zar\w*", r"\b" + _IGEKOTO + r"rogzit\w*",
+    r"\bmegoldas\w*", r"\bnegyedev\w*",
+    # UJ SZAVAK 2026-09-29, ugyanabbol a mert esetbol. Mind olyan to, ami ANGOLUL NEM szo,
+    # ezert nem novelik az angol hamis pozitivok szamat (l. a fenti merest).
+    r"\buzenet\w*", r"\b" + _IGEKOTO + r"azonosit\w*", r"\b" + _IGEKOTO + r"jelent\w*",
+    r"\bhiba\w*", r"\bnaplo\w*", r"\bbejegyz\w*", r"\bsikertelen\w*", r"\bsikeres\w*",
+    r"\bfutas\w*", r"\bfeladat\w*", r"\bkartya\w*", r"\bleiras\w*", r"\bosszes\w*",
+    r"\bmasodik\b", r"\bharmadik\b", r"\bnegyedik\b", r"\botodik\b", r"\bkerdes\w*",
+    r"\bblokk\w*", r"\bforgalm\w*",
 ]
 
 
