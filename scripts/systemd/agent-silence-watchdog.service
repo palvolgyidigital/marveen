@@ -1,0 +1,12 @@
+# NOTE: replace /path/to/marveen (install dir), /home/USER (home), and USER=youruser with your values.
+[Unit]
+Description=Marveen out-of-process silence watchdog for every fleet agent (card 53f4486a -- nothing inside the dashboard/scheduler reports total agent silence while the scheduler itself keeps ticking)
+
+[Service]
+Type=oneshot
+ExecStart=/path/to/marveen/scripts/agent-silence-watchdog.sh
+Environment=PATH=/home/USER/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/USER
+Environment=TZ=Europe/Budapest
+StandardOutput=append:/path/to/marveen/store/agent-silence-watchdog.log
+StandardError=append:/path/to/marveen/store/agent-silence-watchdog.log
