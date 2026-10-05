@@ -1,0 +1,19 @@
+[Unit]
+Description=Run the Marveen agent-silence watchdog every 30 minutes
+
+[Timer]
+# Deliberately NOT bound to the dashboard unit: the exact failure mode this
+# observes (2026-09-26/28, card 53f4486a) had the scheduler itself still
+# ticking -- 486 'fired' rows -- while every agent stayed silent, so a
+# dashboard-embedded check would have been just as blind. The timer must
+# survive both "the dashboard is down" AND "the dashboard is up but nothing
+# downstream of it is working".
+# 30 min against the default 8h weekday threshold leaves 16 ticks inside one
+# threshold window, so a single missed tick (or several) cannot meaningfully
+# delay the alert.
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
