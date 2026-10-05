@@ -6,7 +6,11 @@
 //
 // Every writer that resolves its target through agentSettingsPath() is gated:
 // ensureAgentHooks, ensureAgentStalenessHook, ensureAgentProvenanceHook,
-// ensureEgressGate. Each test asserts the REFUSAL (return false + the
+// ensureEgressGate, ensureMessageDedupGuardHook, ensureCimzettGate,
+// ensureTudastagadasGate, ensureInteragentEkezetGate, ensureUzenetHosszGate.
+// KEEP THIS LIST CURRENT (2026-10-01, measured: 5 of these 9 had NO guard at
+// all for an unmeasured stretch -- the stale 4-item list here is exactly how
+// it went unnoticed). Each test asserts the REFUSAL (return false + the
 // user-global file untouched) and each has a mutation control (the same call
 // for a sub-agent still writes), so a broken gate cannot pass as "nothing
 // happened for anyone".
@@ -23,6 +27,11 @@ import {
   ensureAgentStalenessHook,
   ensureAgentProvenanceHook,
   ensureEgressGate,
+  ensureMessageDedupGuardHook,
+  ensureCimzettGate,
+  ensureTudastagadasGate,
+  ensureInteragentEkezetGate,
+  ensureUzenetHosszGate,
   agentSettingsPath,
 } from '../web/agent-scaffold.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
@@ -109,12 +118,57 @@ describe('#1305: scaffold hook writers refuse the main agent', () => {
     mainFileUntouched()
   })
 
+  it('ensureMessageDedupGuardHook: main is a no-op, a sub-agent still gets the hook', () => {
+    expect(ensureMessageDedupGuardHook(MAIN_AGENT_ID)).toBe(false)
+    mainFileUntouched()
+    expect(ensureMessageDedupGuardHook(PROBE)).toBe(true)
+    expect(probeHookCommands().some((c) => c.includes('message-dedup-guard.py'))).toBe(true)
+    mainFileUntouched()
+  })
+
+  it('ensureCimzettGate: main is a no-op, a sub-agent still gets the gate', () => {
+    expect(ensureCimzettGate(MAIN_AGENT_ID)).toBe(false)
+    mainFileUntouched()
+    expect(ensureCimzettGate(PROBE)).toBe(true)
+    expect(probeHookCommands().some((c) => c.includes('cimzett-gate.py'))).toBe(true)
+    mainFileUntouched()
+  })
+
+  it('ensureTudastagadasGate: main is a no-op, a sub-agent still gets the gate', () => {
+    expect(ensureTudastagadasGate(MAIN_AGENT_ID)).toBe(false)
+    mainFileUntouched()
+    expect(ensureTudastagadasGate(PROBE)).toBe(true)
+    expect(probeHookCommands().some((c) => c.includes('tudastagadas-gate.py'))).toBe(true)
+    mainFileUntouched()
+  })
+
+  it('ensureInteragentEkezetGate: main is a no-op, a sub-agent still gets the gate', () => {
+    expect(ensureInteragentEkezetGate(MAIN_AGENT_ID)).toBe(false)
+    mainFileUntouched()
+    expect(ensureInteragentEkezetGate(PROBE)).toBe(true)
+    expect(probeHookCommands().some((c) => c.includes('interagent-ekezet-gate.py'))).toBe(true)
+    mainFileUntouched()
+  })
+
+  it('ensureUzenetHosszGate: main is a no-op, a sub-agent still gets the gate', () => {
+    expect(ensureUzenetHosszGate(MAIN_AGENT_ID)).toBe(false)
+    mainFileUntouched()
+    expect(ensureUzenetHosszGate(PROBE)).toBe(true)
+    expect(probeHookCommands().some((c) => c.includes('uzenet-hossz-gate.py'))).toBe(true)
+    mainFileUntouched()
+  })
+
   it('a main-agent settings file is not even created when absent', () => {
     rmSync(mainSettings, { force: true })
     ensureAgentHooks(MAIN_AGENT_ID)
     ensureAgentStalenessHook(MAIN_AGENT_ID)
     ensureAgentProvenanceHook(MAIN_AGENT_ID)
     ensureEgressGate(MAIN_AGENT_ID)
+    ensureMessageDedupGuardHook(MAIN_AGENT_ID)
+    ensureCimzettGate(MAIN_AGENT_ID)
+    ensureTudastagadasGate(MAIN_AGENT_ID)
+    ensureInteragentEkezetGate(MAIN_AGENT_ID)
+    ensureUzenetHosszGate(MAIN_AGENT_ID)
     expect(existsSync(mainSettings)).toBe(false)
   })
 })
