@@ -1,9 +1,9 @@
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, rmSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   listPendingTaskRetries, deletePendingTaskRetryById, listTaskRunHistory,
 } from '../../db.js'
-import { MAIN_AGENT_ID, currentBotName } from '../../config.js'
+import { MAIN_AGENT_ID, STORE_DIR, currentBotName } from '../../config.js'
 import { runAgent } from '../../agent.js'
 import { logger } from '../../logger.js'
 import { toPendingRetryView } from '../../pending-retries.js'
@@ -25,6 +25,61 @@ import type { RouteContext } from './types.js'
 // "." or "/" survives), the empty check rejects a name that sanitized away
 // (which would otherwise resolve to the tasks root and delete/overwrite it),
 // and safeJoin is a belt-and-suspenders guard against escaping the base.
+// SCHEDCREATELOG930 (kártya 9930fecf, Pedro kérésére 2026-10-01): egy frissen
+// létrehozott, közeli időpontra szóló egyszeri feladat kétszer NEM sült el
+// (09-24), és a gyökér-ok kiderítéséhez a task_runs (24 órás ürülés) és a
+// feladat-könyvtár (fire után eltűnik) semmilyen nyomot nem őriz meg a
+// létrehozáskori configról. Ez a napló az, amin a KÖVETKEZŐ ilyen eset
+// visszamérhető: minden sikeres POST egy sort ír, a teljes configgal, a
+// kézbesítési feloldással (chatId / ambiguousCandidates) és a létrehozó
+// ügynökkel. A sub-ágensek a self-pace hard-gate miatt sosem jutnak el idáig
+// (self-pace-gate.mjs), tehát ha egyszer mégis pedrón kívüli név jelenik meg
+// createdBy-ban, az önmagában lelet -- a kapu megkerülve.
+//
+// Fail-open: egy naplózási hiba SOHA nem buktathatja el a feladat
+// létrehozását, csak egy warn-sort hagy a logger-ben (ugyanaz a minta, mint
+// persistLastTickMs a schedule-runner.ts-ben).
+export const SCHEDULE_CREATION_LOG_PATH = join(STORE_DIR, 'scheduled-task-creations.log')
+
+export interface ScheduleCreationLogEntry {
+  at: number
+  name: string
+  schedule: string
+  type: string
+  agent: string
+  skipIfBusy: boolean
+  telegramChatId: string | undefined
+  createdBy: string | undefined
+  resolvedChatId: string | null
+  ambiguousCandidates: number | undefined
+}
+
+/** Pure: builds one JSON-line log entry. No filesystem, no clock -- `at` is
+ *  passed in, so this is tested without touching Date.now() or disk. */
+export function formatScheduleCreationLogLine(entry: ScheduleCreationLogEntry): string {
+  const row = {
+    ts: new Date(entry.at).toISOString(),
+    name: entry.name,
+    schedule: entry.schedule,
+    type: entry.type,
+    agent: entry.agent,
+    skipIfBusy: entry.skipIfBusy,
+    telegramChatId: entry.telegramChatId ?? null,
+    createdBy: entry.createdBy ?? 'unknown',
+    resolvedChatId: entry.resolvedChatId,
+    ambiguousCandidates: entry.ambiguousCandidates ?? null,
+  }
+  return `${JSON.stringify(row)}\n`
+}
+
+function appendScheduleCreationLog(entry: ScheduleCreationLogEntry): void {
+  try {
+    appendFileSync(SCHEDULE_CREATION_LOG_PATH, formatScheduleCreationLogLine(entry))
+  } catch (err) {
+    logger.warn({ err, name: entry.name }, 'schedule-creation-log: failed to append (task was still created)')
+  }
+}
+
 function resolveScheduleDir(rawName: string): { name: string; dir: string } | null {
   let decoded: string
   try { decoded = decodeURIComponent(rawName) } catch { return null }
@@ -143,7 +198,7 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
       throw err
     }
     const data = JSON.parse(body.toString()) as {
-      name: string; description: string; prompt: string; schedule: string; agent?: string; type?: string; skipIfBusy?: boolean; forceSend?: boolean; targetSession?: string; telegramChatId?: string
+      name: string; description: string; prompt: string; schedule: string; agent?: string; type?: string; skipIfBusy?: boolean; forceSend?: boolean; targetSession?: string; telegramChatId?: string; createdBy?: string
     }
     const name = sanitizeScheduleName(data.name || '')
     if (!name) { json(res, { error: 'Name is required' }, 400); return true }
@@ -191,6 +246,18 @@ Az eredmeny CSAK a kibovitett prompt szovege legyen, semmi mas. Ne hasznalj code
     // task-config.json file as the only way to verify (Pedro's request,
     // msg 2611, 2026-09-02).
     const delivery = resolveBoundChannel(agentName, { telegramChatId })
+    appendScheduleCreationLog({
+      at: Date.now(),
+      name,
+      schedule: data.schedule.trim(),
+      type: data.type || 'task',
+      agent: agentName,
+      skipIfBusy: data.skipIfBusy === true,
+      telegramChatId,
+      createdBy: data.createdBy,
+      resolvedChatId: delivery.chatId,
+      ambiguousCandidates: delivery.ambiguousCandidates,
+    })
     json(res, { ok: true, name, delivery })
     return true
   }
