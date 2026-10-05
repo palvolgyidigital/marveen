@@ -912,6 +912,7 @@ const _dedupGuardScript = join(PROJECT_ROOT, 'scripts', 'hooks', 'message-dedup-
 const DEDUP_GUARD_HOOK_CMD = `bash -c '[ -f ${_dedupGuardScript} ] && exec python3 ${_dedupGuardScript}; exit 0'`
 
 export function ensureMessageDedupGuardHook(name: string): boolean {
+  if (refuseMainAgentHookWrite(name, 'ensureMessageDedupGuardHook')) return false
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
@@ -2368,6 +2369,7 @@ export function injectCimzettGate(existing: Record<string, unknown>): void {
 // cimzett-gate hook, same startup-migration shape as ensureEgressGate (so an
 // already-running agent gets it without a full respawn).
 export function ensureCimzettGate(name: string): boolean {
+  if (refuseMainAgentHookWrite(name, 'ensureCimzettGate')) return false
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
@@ -2420,6 +2422,7 @@ export function injectTudastagadasGate(existing: Record<string, unknown>): void 
 // Idempotent migration: ensure every agent's settings.json carries the
 // tudastagadas-gate hook, same startup-migration shape as ensureCimzettGate.
 export function ensureTudastagadasGate(name: string): boolean {
+  if (refuseMainAgentHookWrite(name, 'ensureTudastagadasGate')) return false
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
@@ -2467,6 +2470,7 @@ export function injectInteragentEkezetGate(existing: Record<string, unknown>): v
 // interagent-ekezet-gate hook, same startup-migration shape as
 // ensureCimzettGate.
 export function ensureInteragentEkezetGate(name: string): boolean {
+  if (refuseMainAgentHookWrite(name, 'ensureInteragentEkezetGate')) return false
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
@@ -2509,6 +2513,7 @@ export function injectUzenetHosszGate(existing: Record<string, unknown>): void {
 // Idempotent migration: ensure every agent's settings.json carries the
 // uzenet-hossz-gate hook, same startup-migration shape as ensureCimzettGate.
 export function ensureUzenetHosszGate(name: string): boolean {
+  if (refuseMainAgentHookWrite(name, 'ensureUzenetHosszGate')) return false
   const settingsPath = agentSettingsPath(name)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
