@@ -30,6 +30,37 @@ TWO TRAPS IN THE EXPORT, both measured, both guarded below:
 
 The export file is named .xls but is actually HTML -- read_html, not read_excel.
 
+A HARMADIK CSAPDA, ES EZ A KIMENETET OLVASOT ERI (merve 2026-10-05, sajat hiba): a "Tetelek"
+ful egy JOIN eredménye, tehat a mester sulyoszlopai MELLETT a bevetelezes-export oszlopai is
+rajta vannak (MENNY, BESZERT, x0, x1, sku). Ha egy kesobbi elemzes a sulyoszlopokat KIZARASSAL
+valogatja ("minden, ami nem CSZ/db/kategoria/netto/brutto"), akkor a BESZERT beszerzesi ERTEK
+is belekerul az osszegbe. Nalam ez 61,7 MILLIO kg "elterest" adott, es nem hibauzenet fogta meg,
+hanem a fizikai ertelmetlenseg.
+A szabaly: a sulyoszlopokat BEFOGLALASSAL valogasd (a 'Termék ...' prefixu oszlopok plusz a
+netto/brutto), vagy ha mar kizarassal, akkor allits egy nagysagrendi assertet a vegen. Egy
+"minden kiveve X" halmaz akkor romlik el, amikor a tabla uj oszlopot kap -- es a join pontosan
+ezt teszi.
+
+A NEGYEDIK CSAPDA, ES EZ A PARAMETEREKET ERI (merve 2026-10-05, sajat hiba): A SZKRIPT
+ALAPERTELMEZETT MESTERE NEM AZ, AMIVEL A KOZOS MAPPA FAJLJAI KESZULTEK. A --mester default a
+CSOMAGOLAS.xlsx, a /mnt/kozos/PENZUGY/EPR/2026 I es 2026 II mappaban levo szamolt tablak viszont
+a CSOMAGOLAS_BOVITETT_2026-09-18_javaslat.xlsx-szel keszultek, ES a --kizar-ral. A kettő kozti
+elteres nem kozmetikai: 2026 Q2-re 570 tetel / 11049 db a bovitettel, szemben 341 / 8350-nel az
+alapertelmezettel, vagyis 229 cikk es 2699 darab a kulonbseg.
+
+A REPRODUKALO RECEPT, BITRE IGAZOLVA mindket negyedeven (az Osszesito fulon 0,000000000 a
+legnagyobb cella-elteres a 10-02-i kozos fajlokhoz kepest):
+
+  --mester "/mnt/kozos/PENZUGY/EPR/CSOMAGOLAS_BOVITETT_2026-09-18_javaslat.xlsx" \
+  --kizar 14584 154216
+
+A ket kizart cikk: 14584 (Remootio 3.0 Dual) es 154216 (LinX vercukormero), Abel magyar-beszallitoi
+szabalya szerint. Q1-ben 189 db, Q2-ben 286 db.
+
+A SZABALY: ha a kimenet egy MAR LETEZO fajl mellé vagy helyere kerul, elobb REPRODUKALD azt a
+fajlt, es csak a bitre egyezes utan tedd ra a sajat valtoztatasod. Az alapertelmezes a szkript
+sajat tortenete, nem a celhelye.
+
 Usage:
   python3 scripts/epr-negyedev-osszesito.py "<bevetelezes.xls>" [--ki <kimeneti.xlsx>]
 """
@@ -41,6 +72,26 @@ import pandas as pd
 
 MESTER = "/mnt/kozos/PÉNZÜGY/EPR/CSOMAGOLÁS.xlsx"
 KATEGORIA_OSZLOP = "EPR Kategória"
+# A ket kategoria-nev, amit az akku-atvezetes osszekot. A mesterben pontosan igy
+# szerepelnek (merve 2026-10-05: 1083 "Kotelezettsegen kivuli" es 57 "Elem/Akku
+# hordozhato" sor), ezert szo szerint hasonlitunk, nem mintaval.
+KIVULI_KAT = "Kötelezettségen kívüli"
+AKKU_KAT = "Elem/Akku hordozható"
+AKKU_OSZLOP = "Termék akkumulátorának súlya"
+NETTO_OSZLOP = "Nettó súly"
+BRUTTO_OSZLOP = "Bruttó súly"
+
+
+def resz_oszlopok(df):
+    """A RESZSULY-oszlopok, BEFOGLALASSAL valogatva (l. a HARMADIK CSAPDA a docstringben).
+
+    A mester minden reszsuly-oszlopa 'Termék ' prefixszel kezdodik: a beepitett akku, az
+    alkali elem tartozek, az elsodleges csomagolas hat oszlopa es a gyujto csomagolas het
+    oszlopa. A netto es a brutto NEM reszsuly, azok kulon allnak. Kizarassal ('minden, ami
+    nem CSZ/db/kategoria/netto/brutto') ez a lista a join utan a BESZERT beszerzesi erteket
+    is beszedné, ami 61,7 millio kg "elterest" adott 2026-10-05-en.
+    """
+    return [c for c in df.columns if c.startswith("Termék ")]
 
 
 def sku(v):
@@ -164,6 +215,38 @@ def main():
                          "veszi. ALAPBOL KI VAN KAPCSOLVA, hogy a mar BEADOTT negyedevek "
                          "reprodukcioja (a pozitiv kontroll) bitre egyezo maradjon -- azok a "
                          "tablak a hibas erteket tartalmazzak. UJ beadasnal viszont kapcsold be.")
+    ap.add_argument("--akku-atvezetes", action="store_true",
+                    help="A KOTELEZETTSEGEN KIVULI kategoriaban allo cikkek AKKU-SULYAT atvezeti "
+                         "az Elem/Akku hordozhato sorba. ABEL KERESE 2026-10-05, a konyvelo "
+                         "eszrevetele alapjan (Hotter Andras, t15hivatal): az osszesito fulon a "
+                         "kotelezettsegen kivuli sor es az elem/akku resz KIZARJA EGYMAST. A "
+                         "kategoria a KESZULEK-aramra vonatkozik, a beepitett akku viszont kulon "
+                         "aram, tehat az akku-suly akkor is a mienk, ha a termek maga nem esik "
+                         "keszulek-kotelezettseg ala. CSAK az akku-oszlopot mozgatja, a csomagolas- "
+                         "es sulyertekeket NEM. ALAPBOL KI VAN KAPCSOLVA, hogy a mar BEADOTT "
+                         "negyedevek reprodukcioja bitre egyezo maradjon; UJ beadasnal kapcsold be.")
+    ap.add_argument("--brutto-kiigazitas", action="store_true",
+                    help="Ahol a RESZSULYOK OSSZEGE (netto + minden 'Termék ...' oszlop) "
+                         "TOBB a brutto sulynal, ott a bruttot felhozza a reszek osszegere. "
+                         "ABEL KERESE 2026-10-05: 'ne legyen elteres, ugy javitsd, hogy a "
+                         "brutto tomegnel ne legyen tobb az osszes reszadat.' A konyvelo a "
+                         "tetelek fulon szurke ellenorzo oszlopokkal pont ezt vizsgalta. "
+                         "FIZIKAI INDOK: a resz nem lehet nehezebb az egesznel, tehat ezeken "
+                         "a teteleken valami biztosan hibas. AMIT EZ A KAPCSOLO NEM TUD: azt "
+                         "NEM dontheti el, hogy a brutto van-e alulmerve vagy egy reszoszlop "
+                         "felulmerve. A bruttot mozgatja, mert a BEVALLASBA a reszsulyok "
+                         "mennek (anyagaram szerint), a brutto csak kontroll-adat -- igy a "
+                         "bevallott mennyisegek egyetlen grammal sem valtoznak. A fordított "
+                         "irany (brutto > reszek) ERINTETLEN marad: az fizikailag lehetseges, "
+                         "mert nem minden osszetevo van tetelezve. ALAPBOL KI VAN KAPCSOLVA, "
+                         "hogy a mar BEADOTT negyedevek reprodukcioja bitre egyezo maradjon.")
+    ap.add_argument("--kizar", nargs="*", default=[], metavar="SKU",
+                    help="Cikkszamok, amelyek NEM tartoznak az EPR kotelezettseg ala, es ezert "
+                         "ki kell esniuk a negyedevbol. ABEL SZABALYA, 2026-10-02: ami MAGYAR "
+                         "beszallitotol jon, azt nem mi helyezzuk eloszor forgalomba, tehat nem "
+                         "a mi bevallasunkba valo. A BEVETELEZES-EXPORT NEM HORDOZ BESZALLITOT "
+                         "(csak CSZ, MENNY, BESZERT, es a BESZERT ertek, nem partner), ezert ez "
+                         "a szures CSAK cikkszam alapjan vegezheto el, kezzel megadott listabol.")
     a = ap.parse_args()
 
     print(f"BEVETELEZES: {a.bevetelezes}")
@@ -173,6 +256,21 @@ def main():
                       "fajlnev allitja")
     b = bevetelezes_beolvas(a.bevetelezes)
     print(f"  {len(b)} adatsor, {b['sku'].nunique()} kulonbozo cikk, {b['db'].sum():.0f} darab")
+
+    if a.kizar:
+        kizar = {str(x).strip() for x in a.kizar}
+        marad = b[~b["sku"].astype(str).str.strip().isin(kizar)]
+        kiesett = b[b["sku"].astype(str).str.strip().isin(kizar)]
+        print(f"  KIZARVA (EPR-kotelezettsegen kivuli beszallito): {len(kiesett)} cikk, "
+              f"{kiesett['db'].sum():.0f} db")
+        for _, r in kiesett.iterrows():
+            print(f"    {r['db']:6.0f} db  {str(r['CSZ'])[:64]}")
+        nem_talalt = kizar - set(b["sku"].astype(str).str.strip())
+        if nem_talalt:
+            print(f"    FIGYELEM, a megadott cikkszamok kozul {len(nem_talalt)} NINCS BENNE "
+                  f"ebben a negyedevben: {sorted(nem_talalt)}")
+        b = marad
+        print(f"  kizaras utan: {len(b)} adatsor, {b['db'].sum():.0f} darab")
 
     m = pd.read_excel(a.mester, sheet_name="Munka1")
     m["sku"] = m["CSZ"].map(sku)
@@ -220,8 +318,64 @@ def main():
     for c in suly_oszlopok:
         megvan[c] = pd.to_numeric(megvan[c], errors="coerce").fillna(0) * megvan["db"]
 
+    # A KONTROLL-OSZLOP MINDIG kiirodik, kapcsolotol fuggetlenul: a konyvelo pontosan ezt
+    # szamolta ki kezzel a visszakuldott tablan, es ha a fulon ott all, nem kell ujra.
+    reszek = resz_oszlopok(megvan)
+    megvan["ELLENORZES netto+reszek-brutto"] = (
+        megvan[NETTO_OSZLOP] + megvan[reszek].sum(axis=1) - megvan[BRUTTO_OSZLOP])
+
+    if a.brutto_kiigazitas:
+        osszeg = megvan[NETTO_OSZLOP] + megvan[reszek].sum(axis=1)
+        tul = osszeg - megvan[BRUTTO_OSZLOP]
+        erintett = tul > 0.0005
+        if not erintett.any():
+            print("  BRUTTO-KIIGAZITAS: egyetlen tetelen sem haladja meg a reszek osszege "
+                  "a bruttot, nincs mit kiigazitani.")
+        else:
+            print(f"  BRUTTO-KIIGAZITAS: {int(erintett.sum())} tetelen a reszek osszege "
+                  f"meghaladta a bruttot, osszesen {tul[erintett].sum():.3f} kg-mal. "
+                  f"A brutto ezeken felhozva a reszek osszegere.")
+            print(f"    a brutto vegosszege: {megvan[BRUTTO_OSZLOP].sum():.3f} -> "
+                  f"{(megvan[BRUTTO_OSZLOP] + tul.clip(lower=0)).sum():.3f} kg")
+            nagy = megvan.loc[erintett, ["CSZ", "db", BRUTTO_OSZLOP]].assign(tul=tul[erintett])
+            print("    a ot legnagyobb kiigazitas:")
+            for _, r in nagy.sort_values("tul", ascending=False).head(5).iterrows():
+                print(f"      {str(r['CSZ'])[:54]:54} {r[BRUTTO_OSZLOP]:9.3f} -> "
+                      f"{r[BRUTTO_OSZLOP] + r['tul']:9.3f}  (+{r['tul']:.3f})")
+            megvan[BRUTTO_OSZLOP] = megvan[BRUTTO_OSZLOP] + tul.clip(lower=0)
+            megvan["ELLENORZES netto+reszek-brutto"] = (
+                megvan[NETTO_OSZLOP] + megvan[reszek].sum(axis=1) - megvan[BRUTTO_OSZLOP])
+            marad = (megvan["ELLENORZES netto+reszek-brutto"] > 0.0005).sum()
+            print(f"    VISSZAMERVE: a kiigazitas utan {int(marad)} tetelen haladja meg "
+                  f"a reszek osszege a bruttot (0 a helyes).")
+
     pivot = megvan.groupby(KATEGORIA_OSZLOP).agg(
         {"db": "sum", **{c: "sum" for c in suly_oszlopok}})
+
+    if a.akku_atvezetes:
+        # A VEGOSSZEG ELOTT fut, tehat a vegosszeg valtozatlan marad: ez atsorolas,
+        # nem uj suly. Ha valamelyik kategoria nem szerepel ebben a negyedevben, azt
+        # KIMONDJUK, nem csendben kihagyjuk.
+        if KIVULI_KAT not in pivot.index:
+            print(f"  AKKU-ATVEZETES: a '{KIVULI_KAT}' kategoria nincs ebben a negyedevben, "
+                  f"nincs mit atvezetni.")
+        else:
+            mozog = float(pivot.loc[KIVULI_KAT, AKKU_OSZLOP])
+            if mozog == 0:
+                print(f"  AKKU-ATVEZETES: a '{KIVULI_KAT}' sorban nulla akku-suly all, "
+                      f"nincs mit atvezetni.")
+            else:
+                if AKKU_KAT not in pivot.index:
+                    print(f"  AKKU-ATVEZETES: FIGYELEM, a cel kategoria ('{AKKU_KAT}') nincs "
+                          f"ebben a negyedevben, ezert UJ sorként jon letre.")
+                    pivot.loc[AKKU_KAT] = 0.0
+                elotte = float(pivot.loc[AKKU_KAT, AKKU_OSZLOP])
+                pivot.loc[AKKU_KAT, AKKU_OSZLOP] = elotte + mozog
+                pivot.loc[KIVULI_KAT, AKKU_OSZLOP] = 0.0
+                print(f"  AKKU-ATVEZETES: {mozog:.3f} kg akku-suly atvezetve "
+                      f"'{KIVULI_KAT}' -> '{AKKU_KAT}' ({elotte:.3f} -> "
+                      f"{elotte + mozog:.3f}). A vegosszeg NEM valtozik.")
+
     pivot.loc["VEGOSSZEG"] = pivot.sum()
 
     print()
