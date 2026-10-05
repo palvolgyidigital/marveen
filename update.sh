@@ -559,6 +559,41 @@ NEW_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 NEW_VERSION_FULL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILT_COMMIT_FILE="$INSTALL_DIR/dist/.built-commit"
 
+# SERVICE_PREDATES_HEAD (kártya 92ff79fc, 2026-10-02): a build-marker azt mondja,
+# dist-et MIKOR építették, nem azt, hogy a FUTÓ FOLYAMAT azt az épitést betöltötte-e.
+# Ha upstream-sync.sh (01:30) buildel, de nem indít újra, a marker frissen áll, a
+# szolgáltatás mégis a régi kódot futtatja -- ezt a DIST_STALE marker-összevetés nem
+# látja. Ez a függvény a FUTÓ szolgáltatás saját ActiveEnterTimestamp-ját méri a HEAD
+# commit idejéhez: ha a szolgáltatás a commit ELŐTT indult, a futó kód biztosan nem
+# ez a commit, függetlenül attól, mit mond a marker.
+#
+# FAIL-OPEN, szándékosan: ha az egység nem azonosítható, vagy a systemctl/date/git
+# bármelyike hiányzik vagy hibázik, a függvény 1-et (nem-stale-ezen-az-úton) ad
+# vissza -- ez a már meglévő marker-ellenőrzést NEM gyengíti, csak nem ad hozzá
+# plusz találatot, ha nem tud mérni. A meglévő DIST_STALE-ág ettől függetlenül
+# működik tovább, ahogy eddig.
+service_predates_head() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  command -v date >/dev/null 2>&1 || return 1
+  local slug unit scope active_ts active_epoch head_epoch
+  slug="$(grep -E '^MAIN_AGENT_ID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+  slug="${slug:-marveen}"
+  unit="${slug}-dashboard.service"
+  scope=""
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    scope=""
+  elif systemctl --user cat "$unit" >/dev/null 2>&1; then
+    scope="--user"
+  else
+    return 1
+  fi
+  active_ts="$(systemctl $scope show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null)"
+  [ -n "$active_ts" ] || return 1
+  active_epoch="$(date -d "$active_ts" +%s 2>/dev/null)" || return 1
+  head_epoch="$(git log -1 --format=%ct HEAD 2>/dev/null)" || return 1
+  [ "$active_epoch" -lt "$head_epoch" ]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # UNIT MAINTENANCE -- and its position in this file is the fix, not a detail.
 #
@@ -1041,7 +1076,11 @@ if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
   # so we fall through to the normal build + restart instead of exiting.
   BUILT_COMMIT="$(cat "$BUILT_COMMIT_FILE" 2>/dev/null || echo "")"
   DIST_STALE=0
+  MARKER_STALE=0
   if [ ! -d "$INSTALL_DIR/dist" ] || [ "$BUILT_COMMIT" != "$NEW_VERSION_FULL" ]; then
+    DIST_STALE=1
+    MARKER_STALE=1
+  elif service_predates_head; then
     DIST_STALE=1
   fi
 
@@ -1052,8 +1091,10 @@ if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
     # only the rebuild + restart we actually need will run.
     if [ "$FORCE_REBUILD" = "1" ]; then
       echo -e "  ${ORANGE}↻${NC} Mar a legfrissebb verzion ($NEW_VERSION), de --rebuild -> ujraforditas + restart"
-    else
+    elif [ "$MARKER_STALE" = "1" ]; then
       echo -e "  ${ORANGE}↻${NC} Mar a legfrissebb verzion ($NEW_VERSION), de a dist elavult (built=${BUILT_COMMIT:-none}) -> ongyogyito ujraforditas + restart"
+    else
+      echo -e "  ${ORANGE}↻${NC} Mar a legfrissebb verzion ($NEW_VERSION), a dist marker egyezik, de a FUTO szolgaltatas regebbi mint a HEAD commit -> ongyogyito ujraforditas + restart"
     fi
   elif [ "$RESEED_FLEET" != "1" ] && [ "$REGEN_CLAUDEMD" != "1" ]; then
     if [[ "${MARVEEN_LANG:-hu}" == "en" ]]; then
