@@ -35,8 +35,15 @@ const hooks: Hooks = settings.hooks ?? {}
 // flight -- is gated to the active CHANNEL_PROVIDER, by the two
 // install-*-progress-hook.sh scripts.
 const EXPECTED: Record<string, string[]> = {
+  // REVIEWED ADDITION 2026-10-05 (card 1a317342, Bob's measurement): the three
+  // gates below reached the main agent only through the UNGUARDED scaffold write
+  // into the user-global settings.json. agentSettingsPath() returns the global
+  // file unconditionally for MAIN_AGENT_ID, so once the #1305 guard covers those
+  // writers too, this tracked file is their ONLY home. Measured on the day:
+  // project 0 / global 1 for all three, while the two already listed here stood
+  // in BOTH files (ff7e345, 1b44497 added them by hand).
   UserPromptSubmit: [
-    'ledger-capture.py', 'inbox-drain.py', 'telegram-reply-directive.py',
+    'ledger-capture.py', 'inbox-drain.py', 'message-dedup-guard.py', 'telegram-reply-directive.py',
     'provenance-gate.py', 'staleness-guard.py', 'memory-lookup-nudge.py', 'channel-inbox-drain.py',
     'voice-reply-directive.py', 'telegram_progress.py', 'slack_progress.py',
     'marveen-commands.py',
@@ -49,9 +56,14 @@ const EXPECTED: Record<string, string[]> = {
   // A failed tool call fires PostToolUseFailure, never PostToolUse
   // (TOOLLOGVAKSIKER921): without this entry tool_call_log cannot hold a 0.
   PostToolUseFailure: ['tool-log-capture.py'],
+  // cimzett-gate.py and tudastagadas-gate.py: same reviewed addition as the
+  // UserPromptSubmit note above. Their matcher is narrower than the length
+  // gate's (reply only, not reply|edit_message) because that is what the
+  // user-global entry carried -- widening it would be a separate decision.
   PreToolUse: [
     'outgoing-copy-gate.py', 'email-approval-gate.py',
     'channel-image-resize.sh', 'egress-gate.mjs', 'memory-frontmatter-gate.py',
+    'cimzett-gate.py', 'tudastagadas-gate.py',
     'uzenet-hossz-gate.py', 'interagent-ekezet-gate.py',
   ],
   Stop: ['marveen-commands.py', 'telegram-reply-guard.py', 'telegram_progress_clear.py', 'slack_progress_clear.py'],
