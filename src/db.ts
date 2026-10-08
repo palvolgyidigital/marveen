@@ -1055,6 +1055,69 @@ export function initDatabase(dbPathOverride?: string): void {
   // Migration: existing idea boxes predate the work/personal boundary.
   try { db.exec("ALTER TABLE idea_box ADD COLUMN scope TEXT NOT NULL DEFAULT 'munka'") } catch { /* column already exists */ }
 
+  // --- CRM: partners, contacts, interactions ---
+  // David's request, 2026-10-08. Four partner types, not two: a supplier/customer
+  // split has no room for Next Software (a service provider we have an open request
+  // with), which is exactly why nobody saw that request sitting for a week.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS partners (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'partner'
+        CHECK(type IN ('beszallito','vevo','szolgaltato','erdeklodo','partner')),
+      owner TEXT,
+      country TEXT,
+      note TEXT,
+      next_step TEXT,
+      next_step_due INTEGER,
+      next_step_owner TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_partners_type ON partners(type)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_partners_owner ON partners(owner)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_partners_next_due ON partners(next_step_due)`)
+
+  // The contact is a PERSON, not the company: a company does not answer a letter.
+  // If the company were the only entity, every thread would be lost when someone leaves.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS partner_contacts (
+      id TEXT PRIMARY KEY,
+      partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      role TEXT,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_partner_contacts_partner ON partner_contacts(partner_id)`)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS partner_interactions (
+      id TEXT PRIMARY KEY,
+      partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+      contact_id TEXT REFERENCES partner_contacts(id) ON DELETE SET NULL,
+      happened_at INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'jegyzet'
+        CHECK(kind IN ('level','hivas','talalkozo','jegyzet','rendeles','egyeb')),
+      summary TEXT NOT NULL,
+      source TEXT,
+      created_by TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_partner_interactions_partner ON partner_interactions(partner_id, happened_at DESC)`)
+
+  // ONE task list, not two: the kanban card IS the task, it just also hangs off a
+  // partner. David's decision, 2026-10-08 -- two lists nobody maintains will drift apart.
+  try { db.exec('ALTER TABLE kanban_cards ADD COLUMN partner_id TEXT REFERENCES partners(id)') } catch { /* already exists */ }
+
   // --- Idea Comments ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS idea_comments (
@@ -4245,6 +4308,165 @@ export function getTelegramHistory(chatId: string, limit: number = 50): Telegram
 }
 
 // --- Idea Box ---
+
+// --- CRM ---------------------------------------------------------------
+// The whole point of the CRM is the NEXT STEP. A partner with no next step and
+// a date is a partner we have lost; that list is what gets shown daily, not the
+// full database.
+
+export type PartnerType = 'beszallito' | 'vevo' | 'szolgaltato' | 'erdeklodo' | 'partner'
+
+export interface PartnerRow {
+  id: string
+  name: string
+  type: PartnerType
+  owner: string | null
+  country: string | null
+  note: string | null
+  next_step: string | null
+  next_step_due: number | null
+  next_step_owner: string | null
+  status: 'active' | 'archived'
+  created_at: number
+  updated_at: number
+}
+
+export interface PartnerContactRow {
+  id: string
+  partner_id: string
+  name: string
+  email: string | null
+  phone: string | null
+  role: string | null
+  note: string | null
+  status: 'active' | 'inactive'
+  created_at: number
+  updated_at: number
+}
+
+export interface PartnerInteractionRow {
+  id: string
+  partner_id: string
+  contact_id: string | null
+  happened_at: number
+  kind: 'level' | 'hivas' | 'talalkozo' | 'jegyzet' | 'rendeles' | 'egyeb'
+  summary: string
+  source: string | null
+  created_by: string | null
+  created_at: number
+}
+
+export function listPartners(opts?: { type?: PartnerType; owner?: string; status?: PartnerRow['status']; q?: string; assignee?: string }): PartnerRow[] {
+  let q = 'SELECT * FROM partners WHERE 1=1'
+  const params: string[] = []
+  if (opts?.type) { q += ' AND type = ?'; params.push(opts.type) }
+  if (opts?.owner) { q += ' AND owner = ?'; params.push(opts.owner) }
+  // Default to active: an archived partner should not silently pad the counts.
+  q += ' AND status = ?'; params.push(opts?.status ?? 'active')
+  if (opts?.q) {
+    q += ' AND (name LIKE ? OR note LIKE ? OR next_step LIKE ?)'
+    const like = `%${opts.q}%`
+    params.push(like, like, like)
+  }
+  // No next step first, then the soonest deadline: the two states that need action.
+  q += ' ORDER BY (next_step_due IS NULL) DESC, next_step_due ASC, name ASC'
+  const rows = db.prepare(q).all(...params) as PartnerRow[]
+  // David 2026-10-08: a listan NEM latszott, hany feladata van egy partnernek, ezert
+  // egy frissen felvett tetel "eltuntnek" tunt. Egy darabszam a kartyan megmondja,
+  // hova kell kattintani. EGY lekerdezes az egeszre, nem partnerenkent egy.
+  // David 2026-10-08 11:46: felelosre is lehessen szurni. A szuro a FELADAT assignee-jere
+  // megy, nem a partner owner-ere: a kerdes az, hogy "kinel van feladat ennel a partnernel".
+  // Ezert a darabszam IS szurt -- kulonben a kartyan 7 allna, a lista meg egy tetelrol szolna.
+  const szamParams: string[] = []
+  let szamQ =
+    `SELECT partner_id,
+            SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END) AS nyitott,
+            COUNT(*) AS osszes
+       FROM kanban_cards
+      WHERE partner_id IS NOT NULL AND archived_at IS NULL`
+  if (opts?.assignee) { szamQ += ' AND assignee = ?'; szamParams.push(opts.assignee) }
+  szamQ += ' GROUP BY partner_id'
+  const szamok = db.prepare(szamQ).all(...szamParams) as
+    { partner_id: string; nyitott: number; osszes: number }[]
+  const terkep = new Map(szamok.map((s) => [s.partner_id, s]))
+  for (const r of rows) {
+    const s = terkep.get(r.id)
+    ;(r as PartnerRow & { open_tasks: number; all_tasks: number }).open_tasks = s?.nyitott ?? 0
+    ;(r as PartnerRow & { open_tasks: number; all_tasks: number }).all_tasks = s?.osszes ?? 0
+  }
+  // Felelos-szurovel csak az a partner erdekes, ahol van is tetele: enelkul a szuro
+  // ugyanazt a 17 partnert adná vissza nullas darabszámmal, tehat nem szurne semmit.
+  if (opts?.assignee) {
+    return rows.filter((r) => (r as PartnerRow & { all_tasks: number }).all_tasks > 0)
+  }
+  return rows
+}
+
+export function getPartner(id: string): PartnerRow | undefined {
+  return db.prepare('SELECT * FROM partners WHERE id = ?').get(id) as PartnerRow | undefined
+}
+
+export function createPartner(p: Omit<PartnerRow, 'created_at' | 'updated_at'>): void {
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare(
+    `INSERT INTO partners (id, name, type, owner, country, note, next_step, next_step_due, next_step_owner, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(p.id, p.name, p.type, p.owner ?? null, p.country ?? null, p.note ?? null,
+        p.next_step ?? null, p.next_step_due ?? null, p.next_step_owner ?? null, p.status, now, now)
+}
+
+export function updatePartner(id: string, patch: Partial<Omit<PartnerRow, 'id' | 'created_at' | 'updated_at'>>): boolean {
+  const now = Math.floor(Date.now() / 1000)
+  const sets: string[] = ['updated_at = ?']
+  const params: unknown[] = [now]
+  for (const k of ['name', 'type', 'owner', 'country', 'note', 'next_step', 'next_step_due', 'next_step_owner', 'status'] as const) {
+    if (patch[k] !== undefined) { sets.push(`${k} = ?`); params.push(patch[k]) }
+  }
+  params.push(id)
+  return db.prepare(`UPDATE partners SET ${sets.join(', ')} WHERE id = ?`).run(...params).changes > 0
+}
+
+/** Egy meglevo kanban-kartya hozzakotese egy partnerhez. Azert kulon fuggveny,
+ *  mert a createKanbanCard szandekosan nem ismeri a partner_id-t: a kartya a
+ *  kanban sajat entitasa marad, a partner-kotes csak egy ratett hivatkozas. */
+export function linkCardToPartner(cardId: string, partnerId: string | null): boolean {
+  return db.prepare('UPDATE kanban_cards SET partner_id = ?, updated_at = ? WHERE id = ?')
+    .run(partnerId, Math.floor(Date.now() / 1000), cardId).changes > 0
+}
+
+export function listPartnerContacts(partnerId: string): PartnerContactRow[] {
+  return db.prepare('SELECT * FROM partner_contacts WHERE partner_id = ? ORDER BY status ASC, name ASC')
+    .all(partnerId) as PartnerContactRow[]
+}
+
+export function createPartnerContact(c: Omit<PartnerContactRow, 'created_at' | 'updated_at'>): void {
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare(
+    `INSERT INTO partner_contacts (id, partner_id, name, email, phone, role, note, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(c.id, c.partner_id, c.name, c.email ?? null, c.phone ?? null, c.role ?? null, c.note ?? null, c.status, now, now)
+}
+
+export function listPartnerInteractions(partnerId: string, limit = 50): PartnerInteractionRow[] {
+  return db.prepare('SELECT * FROM partner_interactions WHERE partner_id = ? ORDER BY happened_at DESC LIMIT ?')
+    .all(partnerId, limit) as PartnerInteractionRow[]
+}
+
+export function createPartnerInteraction(i: Omit<PartnerInteractionRow, 'created_at'>): void {
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare(
+    `INSERT INTO partner_interactions (id, partner_id, contact_id, happened_at, kind, summary, source, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(i.id, i.partner_id, i.contact_id ?? null, i.happened_at, i.kind, i.summary, i.source ?? null, i.created_by ?? null, now)
+}
+
+/** Kanban cards bound to a partner. ONE task list: these are ordinary cards. */
+export function listPartnerCards(partnerId: string, includeDone = true): { id: string; title: string; status: string; assignee: string | null; due_date: string | null }[] {
+  let q = 'SELECT id, title, status, assignee, due_date FROM kanban_cards WHERE partner_id = ? AND archived_at IS NULL'
+  if (!includeDone) q += " AND status != 'done'"
+  q += ' ORDER BY (status = \'done\') ASC, due_date IS NULL, due_date ASC'
+  return db.prepare(q).all(partnerId) as { id: string; title: string; status: string; assignee: string | null; due_date: string | null }[]
+}
 
 export interface IdeaBoxRow {
   id: string

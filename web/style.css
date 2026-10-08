@@ -7757,3 +7757,126 @@ body {
   color: var(--text, inherit);
 }
 .mem-search-label code { font-size: 11px; opacity: .85; }
+
+
+/* ---- Partnerek (CRM) -------------------------------------------------- */
+/* A harom oszlop ugyanazt a vizualis nyelvet hasznalja, mint a kanban-tabla,
+   mert ugyanaz a kerdes: mi var lepesre. Az allapot-szin a bal elen ul, nem a
+   szovegen, hogy a kartya olvashato maradjon. */
+.pn-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.pn-col {
+  background: var(--bg-input);
+  border-radius: var(--radius);
+  padding: 12px;
+  min-width: 0;
+}
+.pn-col-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 0 2px;
+}
+.pn-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.pn-col-title {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--text-muted);
+}
+.pn-col-count {
+  margin-left: auto; font-size: 11px; font-weight: 600; color: var(--text-muted);
+  background: var(--bg-card); border-radius: 10px; padding: 1px 8px;
+}
+.pn-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  margin-bottom: 9px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.pn-card:last-child { margin-bottom: 0; }
+.pn-card:hover { background: var(--bg-card-hover); transform: translateY(-1px); }
+.pn-card.is-late { border-left-color: #d9534f; }
+.pn-card.is-soon { border-left-color: #d9a441; }
+.pn-card.is-ok   { border-left-color: #4caf7d; }
+.pn-card.is-none { border-left-color: var(--text-muted); }
+.pn-row { display: flex; gap: 11px; align-items: flex-start; }
+.pn-avatar {
+  width: 34px; height: 34px; border-radius: var(--radius-sm); flex: none;
+  background: var(--bg-input); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.3px;
+}
+.pn-main { min-width: 0; flex: 1; }
+.pn-name { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.3; }
+.pn-chip {
+  display: inline-block; margin-left: 6px; vertical-align: 1px;
+  font-size: 10px; font-weight: 500; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-muted);
+}
+.pn-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+.pn-step { font-size: 12px; margin-top: 7px; line-height: 1.4; }
+.pn-step.is-late { color: #d9534f; }
+.pn-step.is-soon { color: #b8862b; }
+.pn-step.is-ok   { color: #3a8f66; }
+.pn-step.is-none { color: var(--text-muted); font-style: italic; }
+
+/* Partner-lap */
+.pn-detail-head { margin-bottom: 14px; }
+.pn-next {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-left: 3px solid var(--border); border-radius: var(--radius-sm);
+  padding: 13px 15px; margin: 14px 0;
+}
+.pn-next.is-late { border-left-color: #d9534f; }
+.pn-next.is-soon { border-left-color: #d9a441; }
+.pn-next.is-ok   { border-left-color: #4caf7d; }
+.pn-next.is-none { border-left-color: var(--text-muted); }
+.pn-section {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 11.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--text-muted);
+  margin: 22px 0 10px;
+}
+.pn-section::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+.pn-item {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 13px; margin-bottom: 8px;
+}
+.pn-item.is-done { opacity: 0.55; }
+.pn-empty { font-size: 12.5px; color: var(--text-muted); padding: 4px 2px 10px; }
+.pn-time {
+  border-left: 2px solid var(--border); margin-left: 6px;
+  padding: 10px 0 10px 14px; position: relative;
+}
+.pn-time::before {
+  content: ""; position: absolute; left: -5px; top: 15px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--border);
+}
+.pn-time-date { font-size: 11px; color: var(--text-muted); }
+.pn-time-text { font-size: 12.5px; margin-top: 3px; line-height: 1.5; color: var(--text-secondary); }
+.pn-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+
+/* A partner-lista kartyajan ez vette at a kovetkezo-lepes sor helyet: David
+   2026-10-08-an azt kerte, hogy a fo oldalon csak a feladat-darabszam latszodjon. */
+.pn-count-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.pn-count-line.is-soon { color: var(--text); }
+.pn-count-line.is-none { font-weight: 500; color: var(--text-muted); }

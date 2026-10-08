@@ -77,6 +77,10 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="4" height="13" rx="1"/></svg>
         <span class="sb-label">Kanban</span>
       </a>
+      <a href="#" class="sb-link" data-page="partners">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="sb-label">Partnerek</span>
+      </a>
       <a href="#" class="sb-link" data-page="approvals">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         <span class="sb-label">Jóváhagyások</span>
@@ -1221,6 +1225,30 @@
     </div>
 
     <!-- === Ötletláda Page === -->
+    <div class="page" id="partnersPage" hidden>
+      <div class="page-header">
+        <div class="page-header-row">
+          <div>
+            <h1>Partnerek</h1>
+            <p class="subtitle" id="partnersSubtitle">Betöltés...</p>
+          </div>
+          <div id="partnerFilters" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <div id="partnerTypeFilter" style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn-secondary btn-compact view-toggle-btn active" data-ptype="">Mind</button>
+              <button class="btn-secondary btn-compact view-toggle-btn" data-ptype="beszallito">Beszállító</button>
+              <button class="btn-secondary btn-compact view-toggle-btn" data-ptype="vevo">Vevő</button>
+              <button class="btn-secondary btn-compact view-toggle-btn" data-ptype="szolgaltato">Szolgáltató</button>
+              <button class="btn-secondary btn-compact view-toggle-btn" data-ptype="erdeklodo">Érdeklődő</button>
+            </div>
+            <select id="partnerAssigneeFilter" class="input" style="width:170px;font-size:13px" title="Szűrés a feladatok felelősére"></select>
+            <input id="partnerSearch" class="input" style="width:230px;font-size:13px" placeholder="Keresés: cég, jegyzet, lépés">
+          </div>
+        </div>
+      </div>
+      <div id="partnersList"></div>
+      <div id="partnerDetail" hidden></div>
+    </div>
+
     <div class="page" id="ideasPage" hidden>
       <div class="page-header">
         <div class="page-header-row">

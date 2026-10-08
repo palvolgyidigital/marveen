@@ -386,6 +386,7 @@ function switchPage(pageId) {
   if (pageId === 'messages') loadMessagesPage()
   if (pageId === 'tokenUsage') loadTokenUsage()
   if (pageId === 'costs') loadCosts()
+  if (pageId === 'partners') loadPartnersPage()
   if (pageId === 'ideas') loadIdeasPage()
   if (pageId === 'archived') loadArchivedPage()
   if (pageId === 'naplo') loadNaplo()
@@ -18387,3 +18388,519 @@ async function openResearchDoc(agent, name) {
   window._initGanttViewSwitcher = initGanttViewSwitcher
   window.renderGantt = renderGantt
 })()
+
+// --- Partnerek (CRM) ------------------------------------------------------
+// David kerese, 2026-10-08. A lap NEM egy hosszu lista: harom oszlop, mert a
+// kerdes mindig ugyanaz, hogy kinel kell MA lepni. A "nincs kovetkezo lepes"
+// oszlop a legfontosabb: ott vesznek el a partnerek.
+let _partnerType = ''
+let _partnerQuery = ''
+let _partnerAssignee = ''
+let _partnerDoneVisible = true
+
+// A felelos-lista EGY helyen all, mert ket kulon masolat elobb-utobb elter.
+// A TAROLT ertek kisbetus es ekezet nelkuli (a meglevo kanban-sorok is ilyenek,
+// es az audit ezen a neven szolitja meg az ugynokoket), a MEGJELENITETT nev viszont
+// rendes magyar nev. David kerese 2026-10-08 11:30: Csucsu, Zoli, Abel, Marci.
+const PN_FELELOSOK = [
+  { csoport: 'Kollégák', tagok: [
+    ['david', 'David'], ['abel', 'Ábel'], ['marci', 'Marci'],
+    ['zoli', 'Zoli'], ['csucsu', 'Csucsu'],
+  ]},
+  { csoport: 'Ügynökök', tagok: [
+    ['pedro', 'Pedro'], ['sam', 'Sam'], ['max', 'Max'],
+    ['marti', 'Marti'], ['bob', 'Bob'], ['cili', 'Cili'],
+  ]},
+]
+
+/** A legordulo tartalma. `kivalasztott` nelkul a "nincs felelos" sor az aktiv. */
+function _felelosOpciok(kivalasztott) {
+  const k = kivalasztott || ''
+  const ures = `<option value=""${k === '' ? ' selected' : ''}>nincs felelős</option>`
+  const csoportok = PN_FELELOSOK.map(cs =>
+    `<optgroup label="${cs.csoport}">` +
+    cs.tagok.map(([ertek, nev]) =>
+      `<option value="${ertek}"${k === ertek ? ' selected' : ''}>${nev}</option>`).join('') +
+    `</optgroup>`).join('')
+  // Ha a kartyan olyan felelos all, ami nincs a listan, NE tuntessuk el nemán:
+  // inkabb jelenjen meg sajat sorkent, hogy latszodjon, mi van ratarolva.
+  const ismert = PN_FELELOSOK.flatMap(cs => cs.tagok.map(x => x[0]))
+  const extra = (k && !ismert.includes(k))
+    ? `<option value="${escapeHtml(k)}" selected>${escapeHtml(k)} (listán kívül)</option>` : ''
+  return ures + csoportok + extra
+}
+
+/** A tarolt (kisbetus) felelos-ertekbol a megjelenitett nev. Ismeretlennel maga az ertek. */
+function _felelosNev(ertek) {
+  for (const cs of PN_FELELOSOK) {
+    for (const [e, nev] of cs.tagok) if (e === ertek) return nev
+  }
+  return ertek
+}
+
+// A kanban statuszai angolul vannak TAROLVA (az API es az audit ezen a neven ismeri),
+// de magyar kepernyore magyar szo valo. Csak a megjelenites fordul, az ertek nem.
+const PN_STATUSZ_LABEL = {
+  planned: 'tervezett', in_progress: 'folyamatban', waiting: 'várakozik', done: 'kész',
+}
+
+const PARTNER_TYPE_LABEL = {
+  beszallito: 'beszállító', vevo: 'vevő', szolgaltato: 'szolgáltató',
+  erdeklodo: 'érdeklődő', partner: 'partner',
+}
+
+function _partnerInitials(nev) {
+  // A vezeto irasjeleket dobjuk el: a "[TESZT] LumenPro" monogramja igy "LG" lesz,
+  // nem "[L". Idezojellel vagy zarojellel kezdodo valodi cegnevnel is ez a helyes.
+  const sz = String(nev || '?').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean)
+  return ((sz[0] || '?')[0] + (sz[1] ? sz[1][0] : '')).toUpperCase()
+}
+
+// JELENLEG NEM HASZNALT a felületen: David 2026-10-08 11:46-kor levette a kovetkezo-lepes
+// sort a kartyarol es a partner-laprol is. Az adat (next_step, next_step_due) valtozatlanul
+// all az adatbazisban es az API-ban, ezert a formazo itt marad, ha visszakeri.
+function _partnerDueText(p) {
+  if (p.next_step_due === null || p.next_step_due === undefined) {
+    return { cls: 'none', txt: 'Nincs következő lépés' }
+  }
+  const nap = Math.floor((p.next_step_due * 1000 - Date.now()) / 86400000)
+  const datum = new Date(p.next_step_due * 1000).toLocaleDateString('hu-HU')
+  const lepes = p.next_step ? ': ' + p.next_step : ''
+  if (nap < 0) return { cls: 'late', txt: `${-nap} napja lejárt${lepes}` }
+  if (nap === 0) return { cls: 'soon', txt: `Ma${lepes}` }
+  if (nap === 1) return { cls: 'soon', txt: `Holnap${lepes}` }
+  return { cls: 'ok', txt: `${datum}${lepes}` }
+}
+
+// David 2026-10-08 11:46: a fo oldalon CSAK az latszodjon, mennyi feladat van. A
+// kovetkezo-lepes sor lekerult a kartyarol; a darabszam vette at a helyet, es az
+// allapot-szin is a feladatokat koveti, nem a next_step_due-t.
+function _partnerCardHtml(p) {
+  const nyitott = p.open_tasks || 0
+  const osszes = p.all_tasks || 0
+  const cls = nyitott > 0 ? 'soon' : 'none'
+  const szam = nyitott > 0
+    ? `${nyitott} nyitott feladat`
+    : (osszes ? 'nincs nyitott feladat' : 'nincs feladat')
+  // A lezart tetelek szama csak akkor erdekes, ha van is ilyen -- kulonben zaj.
+  const lezart = osszes - nyitott
+  return `<div class="pn-card is-${cls}" onclick="openPartner('${p.id}')">
+    <div class="pn-row">
+      <div class="pn-avatar">${_partnerInitials(p.name)}</div>
+      <div class="pn-main">
+        <div class="pn-name">${escapeHtml(p.name)}<span class="pn-chip">${PARTNER_TYPE_LABEL[p.type] || p.type}</span></div>
+        <div class="pn-count-line is-${cls}">${szam}${lezart > 0 ? `<span class="pn-meta" style="margin:0">&middot; ${lezart} lezárt</span>` : ''}</div>
+      </div>
+    </div>
+  </div>`
+}
+
+const PN_DOT = { late: '#d9534f', soon: '#d9a441', ok: '#4caf7d', none: 'var(--text-muted)' }
+
+function _partnerColumn(cim, arr, szin) {
+  return `<div class="pn-col">
+    <div class="pn-col-header">
+      <span class="pn-dot" style="background:${PN_DOT[szin]}"></span>
+      <span class="pn-col-title">${cim}</span>
+      <span class="pn-col-count">${arr.length}</span>
+    </div>
+    ${arr.length ? arr.map(_partnerCardHtml).join('') : '<div class="pn-empty">nincs ilyen</div>'}
+  </div>`
+}
+
+async function loadPartnersPage() {
+  const lista = document.getElementById('partnersList')
+  const reszlet = document.getElementById('partnerDetail')
+  if (!lista) return
+  reszlet.hidden = true
+  lista.hidden = false
+  // A tipus-szuro es a kereso a LISTAHOZ tartozik: a partner-lapon csak zavar,
+  // es pont ez volt az "egybemosodik" visszajelzes egyik oka.
+  const szurok = document.getElementById('partnerFilters')
+  // NEM a hidden attributum: az elemen inline display:flex all, ami FELULIRJA a
+  // [hidden] alapertelmezett display:none-jat. Ugyanaz a cascade-csapda, amit a
+  // style.css a kanban-oszlopoknal kulon kommenttel jelol.
+  if (szurok) szurok.style.display = 'flex'
+  lista.innerHTML = '<p class="subtitle">Betöltés...</p>'
+  const qs = new URLSearchParams()
+  if (_partnerType) qs.set('type', _partnerType)
+  if (_partnerQuery) qs.set('q', _partnerQuery)
+  if (_partnerAssignee) qs.set('assignee', _partnerAssignee)
+  let d
+  try {
+    const r = await fetch('/api/partners?' + qs.toString())
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    d = await r.json()
+  } catch (e) {
+    // Egy bukott lekeres NEM ures lista: mondjuk ki, melyik tortent.
+    lista.innerHTML = `<p class="subtitle">A partnerek lekérése nem sikerült (${escapeHtml(String(e.message || e))}). Ez nem azt jelenti, hogy nincs partner.</p>`
+    return
+  }
+  // A csoportositas a FELADATOKAT koveti, mert a kovetkezo-lepes sor lekerult a
+  // kartyarol -- egy "Lejart lepes" fejlec olyan adatra mutatott volna, ami mar nem
+  // latszik. Ket oszlop: ahol van dolog, es ahol nincs.
+  const rend = (a, b) => (b.open_tasks || 0) - (a.open_tasks || 0) || a.name.localeCompare(b.name, 'hu')
+  const vanDolog = d.partners.filter(p => (p.open_tasks || 0) > 0).sort(rend)
+  const nincsDolog = d.partners.filter(p => (p.open_tasks || 0) === 0).sort(rend)
+  const sz = d.summary
+  const szurve = _partnerAssignee ? ` &middot; szűrve: ${escapeHtml(_felelosNev(_partnerAssignee))}` : ''
+  document.getElementById('partnersSubtitle').innerHTML =
+    `${sz.total} partner &middot; ${sz.nyitott_feladat ?? 0} nyitott feladat ${sz.van_nyitott ?? 0} partnernél${szurve}`
+
+  lista.innerHTML = `<div class="pn-board">
+      ${_partnerColumn('Van nyitott feladat', vanDolog, 'soon')}
+      ${_partnerColumn('Nincs nyitott feladat', nincsDolog, 'none')}
+    </div>`
+}
+
+async function openPartner(id) {
+  const lista = document.getElementById('partnersList')
+  const reszlet = document.getElementById('partnerDetail')
+  reszlet.hidden = false
+  lista.hidden = true
+  const szurok2 = document.getElementById('partnerFilters')
+  if (szurok2) szurok2.style.display = 'none'
+  reszlet.innerHTML = '<p class="subtitle">Betöltés...</p>'
+  let d
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(id)}?done=${_partnerDoneVisible ? '1' : '0'}`)
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    d = await r.json()
+  } catch (e) {
+    reszlet.innerHTML = `<p class="subtitle">A partner lekérése nem sikerült (${escapeHtml(String(e.message || e))}).</p>`
+    return
+  }
+  const p = d.partner
+  const nyitott = d.cards.filter(c => c.status !== 'done').length
+  const lezart = d.cards.length - nyitott
+  reszlet.innerHTML = `
+    <div class="pn-toolbar">
+      <button class="btn-secondary btn-compact" onclick="loadPartnersPage()">&larr; Vissza a listához</button>
+    </div>
+    <div class="pn-detail-head">
+      <h2 style="font-size:20px;margin-bottom:4px">${escapeHtml(p.name)}</h2>
+      <p class="subtitle" style="margin:0">${PARTNER_TYPE_LABEL[p.type] || p.type} &middot; felelős: ${escapeHtml(p.owner ? _felelosNev(p.owner) : 'nincs megadva')}${p.country ? ' &middot; ' + escapeHtml(p.country) : ''}</p>
+    </div>
+    ${p.note ? `<div class="pn-item" style="line-height:1.55">${escapeHtml(p.note)}</div>` : ''}
+
+    <div class="pn-section">Kapcsolattartók &middot; ${d.contacts.length}
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showContactForm('${p.id}')">+ Kapcsolattartó</button>
+    </div>
+    <div id="pnContactForm" hidden>
+      <div class="pn-item">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="pnContactName" class="input" style="flex:1 1 150px;min-width:140px;font-size:13px" placeholder="Név (kötelező)">
+          <input id="pnContactRole" class="input" style="flex:1 1 130px;min-width:120px;font-size:13px" placeholder="Beosztás, terület">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <input id="pnContactEmail" class="input" type="email" style="flex:1 1 190px;min-width:160px;font-size:13px" placeholder="E-mail">
+          <input id="pnContactPhone" class="input" style="flex:1 1 140px;min-width:130px;font-size:13px" placeholder="Telefon">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn-primary btn-compact" onclick="saveContact('${p.id}')">Mentés</button>
+          <button class="btn-secondary btn-compact" onclick="hideContactForm()">Mégse</button>
+          <span id="pnContactMsg" style="font-size:12px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+    </div>
+    ${d.contacts.length ? d.contacts.map(c => {
+        // A mailto a SAJAT levelezodet nyitja meg: a level Tole megy, nem a rendszerbol.
+        // Ez szandekos, mert a rendszerbol kimeno level jovahagyas-koteles, egy
+        // kapcsolattartora kattintas viszont nem az.
+        const vanEmail = !!(c.email && c.email.trim())
+        const sorBelso = `<div class="pn-row">
+          <div class="pn-avatar">${_partnerInitials(c.name)}</div>
+          <div class="pn-main">
+            <div class="pn-name" style="font-size:13px">${escapeHtml(c.name)}${vanEmail ? ' <span class="pn-chip">levél</span>' : ''}</div>
+            <div class="pn-meta">${[c.role, c.email, c.phone].filter(Boolean).map(escapeHtml).join(' &middot; ') || 'nincs elérhetőség rögzítve'}</div>
+          </div>
+        </div>`
+        return vanEmail
+          ? `<a class="pn-item" style="display:block;text-decoration:none;color:inherit" href="mailto:${encodeURIComponent(c.email).replace(/%40/g,'@')}">${sorBelso}</a>`
+          : `<div class="pn-item" title="Ehhez a kapcsolattartóhoz nincs e-mail cím rögzítve">${sorBelso}</div>`
+      }).join('') : '<div class="pn-empty">Nincs megnevezett kapcsolattartó. A cég nem válaszol levélre, ezért ez hiány, nem részletkérdés.</div>'}
+
+    <div class="pn-section">Feladatok &middot; ${nyitott} nyitott${lezart ? `, ${lezart} lezárt` : ''}
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showTaskForm('${p.id}')">+ Feladat</button>
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="togglePartnerDone('${p.id}')">${_partnerDoneVisible ? 'Lezártak elrejtése' : 'Lezártak mutatása'}</button>
+    </div>
+    <div id="pnTaskForm" hidden>
+      <div class="pn-item">
+        <input id="pnTaskTitle" class="input" style="width:100%;font-size:13px" placeholder="Mi a feladat? Egy mondat.">
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <input id="pnTaskDue" class="input" type="date" style="width:150px;font-size:12.5px">
+          <select id="pnTaskAssignee" class="input" style="width:130px;font-size:12.5px">
+            ${_felelosOpciok('')}
+          </select>
+          <select id="pnTaskPriority" class="input" style="width:110px;font-size:12.5px">
+            <option value="normal">normál</option>
+            <option value="low">alacsony</option>
+            <option value="high">magas</option>
+            <option value="urgent">sürgős</option>
+          </select>
+          <button class="btn-primary btn-compact" onclick="saveTask('${p.id}')">Mentés</button>
+          <button class="btn-secondary btn-compact" onclick="hideTaskForm()">Mégse</button>
+          <span id="pnTaskMsg" style="font-size:12px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+    </div>
+    ${d.cards.length ? d.cards.map(c => `<div class="pn-item${c.status === 'done' ? ' is-done' : ''}">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <input type="checkbox" ${c.status === 'done' ? 'checked' : ''} title="Kész"
+                 data-elozo="${c.status}"
+                 style="margin-top:3px;width:17px;height:17px;flex:none;cursor:pointer"
+                 onchange="toggleTaskDone('${p.id}','${c.id}', this.checked, this.dataset.elozo)">
+          <div style="min-width:0;flex:1">
+            <div style="font-size:13px;line-height:1.4">${escapeHtml(c.title)}</div>
+            <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
+              <select class="input" style="width:120px;font-size:11.5px;padding:3px 6px"
+                      onchange="patchTask('${p.id}','${c.id}',{assignee:this.value})">
+                ${_felelosOpciok(c.assignee)}
+              </select>
+              <input type="date" class="input" style="width:135px;font-size:11.5px;padding:3px 6px"
+                     value="${c.due_date || ''}"
+                     onchange="patchTask('${p.id}','${c.id}',{due_date:this.value})">
+              <span class="pn-meta" style="margin:0">${escapeHtml(PN_STATUSZ_LABEL[c.status] || c.status)}</span>
+            </div>
+          </div>
+        </div>
+      </div>`).join('') : '<div class="pn-empty">Nincs ehhez a partnerhez kötött kártya.</div>'}
+
+    <div class="pn-section">Előzmény &middot; ${d.interactions.length}
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showMemoForm('${p.id}')">+ Memó</button>
+    </div>
+    <div id="pnMemoForm" hidden>
+      <div class="pn-item">
+        <textarea id="pnMemoText" class="input" rows="3" style="width:100%;font-size:13px;resize:vertical" placeholder="Mi történt? Egy-két mondat elég."></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <select id="pnMemoKind" class="input" style="width:130px;font-size:12.5px">
+            <option value="jegyzet">jegyzet</option>
+            <option value="level">levél</option>
+            <option value="hivas">hívás</option>
+            <option value="talalkozo">találkozó</option>
+            <option value="rendeles">rendelés</option>
+            <option value="egyeb">egyéb</option>
+          </select>
+          <button class="btn-primary btn-compact" onclick="saveMemo('${p.id}')">Mentés</button>
+          <button class="btn-secondary btn-compact" onclick="hideMemoForm()">Mégse</button>
+          <span id="pnMemoMsg" style="font-size:12px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+    </div>
+    ${d.interactions.length ? d.interactions.map(i => `<div class="pn-time">
+        <div class="pn-time-date">${new Date(i.happened_at * 1000).toLocaleString('hu-HU')} &middot; ${escapeHtml(i.kind)}</div>
+        <div class="pn-time-text">${escapeHtml(i.summary)}</div>
+      </div>`).join('') : '<div class="pn-empty">Még nincs rögzített érintkezés.</div>'}
+  `
+}
+
+/** Egy meglevo kartya mezoinek modositasa a partner-laprol. A kanban PUT
+ *  vegpontja irja, tehat UGYANAZ a kartya valtozik, amit a tablan latsz. */
+async function patchTask(partnerId, cardId, mezok) {
+  try {
+    const r = await fetch(`/api/kanban/${encodeURIComponent(cardId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...mezok, actor: 'dashboard' }),
+    })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    await openPartner(partnerId)
+  } catch (e) {
+    // Nem nema bukas: visszatoltjuk a lapot, hogy a VALODI allapot latszodjon,
+    // es kiirjuk, mi tortent. Egy sikertelennek latszo mentes rosszabb, mint egy hiba.
+    alert('A módosítás nem sikerült: ' + String(e.message || e))
+    await openPartner(partnerId)
+  }
+}
+
+/**
+ * A pipa levetele NEM mindig 'planned'-et jelent. A kartya lehetett in_progress vagy
+ * waiting is, es ha a visszavonas vakon planned-re allit, az CSENDBEN elvesziti az
+ * eredeti allapotot.
+ *
+ * MERT ESET, 2026-10-08 11:13:50 es 11:14:03: a GT Euronics-kartya in_progress -> done ->
+ * planned utat jart be 13 masodperc alatt, mert valaki kiprobalta a pipat. Az in_progress
+ * nem jott vissza, es errol semmi nem szolt.
+ *
+ * ELSO, ROSSZ JAVITASOM: a render-ideju allapotot a checkboxon tartottam (data-elozo).
+ * NEM MUKODOTT, es ezt mereskor lattam: a bepipalas utan a lap UJRARENDEROLODIK, tehat a
+ * data-elozo mar 'done' lesz, es a visszavonas megint a planned agra esik. A DOM-ban tarolt
+ * allapotot elmossa az a frissites, ami a mentes helyesseget biztositja.
+ *
+ * A MUKODO MEGOLDAS: modul-szintu terkep, ami tuleli az ujrarenderelest.
+ */
+const _pnDoneElott = new Map()
+
+function toggleTaskDone(partnerId, cardId, kesz, renderStatus) {
+  if (kesz) {
+    // A done ELOTTI allapotot elteszzuk, hogy a visszavonas pontos lehessen.
+    if (renderStatus && renderStatus !== 'done') _pnDoneElott.set(cardId, renderStatus)
+    return patchTask(partnerId, cardId, { status: 'done' })
+  }
+  const vissza = _pnDoneElott.get(cardId) || 'planned'
+  _pnDoneElott.delete(cardId)
+  return patchTask(partnerId, cardId, { status: vissza })
+}
+
+function showTaskForm(id) {
+  const f = document.getElementById('pnTaskForm')
+  if (!f) return
+  f.hidden = false
+  document.getElementById('pnTaskTitle')?.focus()
+}
+
+function hideTaskForm() {
+  const f = document.getElementById('pnTaskForm')
+  if (f) f.hidden = true
+  const i = document.getElementById('pnTaskTitle')
+  if (i) i.value = ''
+  const m = document.getElementById('pnTaskMsg')
+  if (m) m.textContent = ''
+}
+
+async function saveTask(id) {
+  const cim = (document.getElementById('pnTaskTitle')?.value || '').trim()
+  const msg = document.getElementById('pnTaskMsg')
+  if (!cim) { if (msg) msg.textContent = 'Cím nélkül nem mentek feladatot.'; return }
+  const due = document.getElementById('pnTaskDue')?.value || ''
+  const fel = document.getElementById('pnTaskAssignee')?.value || ''
+  const pri = document.getElementById('pnTaskPriority')?.value || 'normal'
+  if (msg) msg.textContent = 'Mentés...'
+  const payload = { title: cim, priority: pri, status: 'planned' }
+  if (due) payload.due_date = due
+  if (fel) payload.assignee = fel
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(id)}/cards`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    await openPartner(id)
+  } catch (e) {
+    // A bukott mentes NEM nema, es a begepelt cim bent marad.
+    if (msg) msg.textContent = 'Nem sikerült menteni (' + String(e.message || e) + '). A szöveg megmaradt.'
+  }
+}
+
+function showContactForm(id) {
+  const f = document.getElementById('pnContactForm')
+  if (!f) return
+  f.hidden = false
+  document.getElementById('pnContactName')?.focus()
+}
+
+function hideContactForm() {
+  const f = document.getElementById('pnContactForm')
+  if (f) f.hidden = true
+  for (const id of ['pnContactName','pnContactRole','pnContactEmail','pnContactPhone']) {
+    const e = document.getElementById(id); if (e) e.value = ''
+  }
+  const m = document.getElementById('pnContactMsg'); if (m) m.textContent = ''
+}
+
+async function saveContact(id) {
+  const msg = document.getElementById('pnContactMsg')
+  const ertek = (x) => (document.getElementById(x)?.value || '').trim()
+  const nev = ertek('pnContactName')
+  if (!nev) { if (msg) msg.textContent = 'A név kötelező, e nélkül nem mentem el.'; return }
+  const email = ertek('pnContactEmail')
+  // Csak akkor szolunk bele, ha a cim biztosan hibas: a hianyzo email ERVENYES allapot
+  // (telefonos kapcsolattarto), a rosszul begepelt viszont nemán elromlott mailto-t ad.
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (msg) msg.textContent = 'Ez a cím nem tűnik érvényesnek. Javítsd, vagy hagyd üresen.'
+    return
+  }
+  if (msg) msg.textContent = 'Mentés...'
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(id)}/contacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: nev, role: ertek('pnContactRole') || null,
+                             email: email || null, phone: ertek('pnContactPhone') || null }),
+    })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    // Visszaolvasassal frissitunk: a mentes utani allapotot a SZERVER mondja meg.
+    await openPartner(id)
+  } catch (e) {
+    // A bukott mentes NEM nema: a begepelt adat bent marad, hogy ne vesszen el.
+    if (msg) msg.textContent = 'Nem sikerült menteni (' + String(e.message || e) + '). A beírt adatok megmaradtak.'
+  }
+}
+
+function showMemoForm(id) {
+  const f = document.getElementById('pnMemoForm')
+  if (!f) return
+  f.hidden = false
+  const ta = document.getElementById('pnMemoText')
+  if (ta) ta.focus()
+}
+
+function hideMemoForm() {
+  const f = document.getElementById('pnMemoForm')
+  if (f) f.hidden = true
+  const ta = document.getElementById('pnMemoText')
+  if (ta) ta.value = ''
+  const m = document.getElementById('pnMemoMsg')
+  if (m) m.textContent = ''
+}
+
+async function saveMemo(id) {
+  const ta = document.getElementById('pnMemoText')
+  const kind = document.getElementById('pnMemoKind')
+  const msg = document.getElementById('pnMemoMsg')
+  const szoveg = (ta?.value || '').trim()
+  if (!szoveg) { if (msg) msg.textContent = 'Üres memót nem mentek.'; return }
+  if (msg) msg.textContent = 'Mentés...'
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(id)}/interactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary: szoveg, kind: kind?.value || 'jegyzet' }),
+    })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    // Visszaolvasassal frissitunk: a mentes utani allapotot a SZERVER mondja meg,
+    // nem a sajat feltevesunk arrol, hogy sikerult.
+    await openPartner(id)
+  } catch (e) {
+    // A bukott mentes NEM nema: a szoveg bent marad, hogy ne vesszen el.
+    if (msg) msg.textContent = 'Nem sikerült menteni (' + String(e.message || e) + '). A szöveg megmaradt.'
+  }
+}
+
+function togglePartnerDone(id) {
+  _partnerDoneVisible = !_partnerDoneVisible
+  openPartner(id)
+}
+
+document.getElementById('partnerTypeFilter')?.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-ptype]')
+  if (!b) return
+  _partnerType = b.dataset.ptype
+  document.querySelectorAll('#partnerTypeFilter button').forEach(x => x.classList.toggle('active', x === b))
+  loadPartnersPage()
+})
+// A felelos-szuro ugyanabbol az EGY listabol tolt fel, mint a kartyak legorduloje.
+// Igy nem fordulhat elo, hogy a szuroben olyan nev all, amit feladatra nem lehet beallitani.
+function _partnerFelelosSzuroFeltolt() {
+  const sel = document.getElementById('partnerAssigneeFilter')
+  if (!sel) return
+  sel.innerHTML = '<option value="">Minden felelős</option>' +
+    PN_FELELOSOK.map(cs =>
+      `<option disabled>— ${cs.csoport} —</option>` +
+      cs.tagok.map(([e, nev]) => `<option value="${e}">${nev}</option>`).join('')
+    ).join('')
+  sel.value = _partnerAssignee
+}
+_partnerFelelosSzuroFeltolt()
+document.getElementById('partnerAssigneeFilter')?.addEventListener('change', (e) => {
+  _partnerAssignee = e.target.value
+  loadPartnersPage()
+})
+
+let _partnerSearchTimer = null
+document.getElementById('partnerSearch')?.addEventListener('input', (e) => {
+  clearTimeout(_partnerSearchTimer)
+  const v = e.target.value
+  _partnerSearchTimer = setTimeout(() => { _partnerQuery = v; loadPartnersPage() }, 250)
+})
