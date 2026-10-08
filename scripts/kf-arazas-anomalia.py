@@ -14,7 +14,7 @@ The model, read from the sheet's own formulas (NOT assumed):
     U = UJ KISKER BRUTTO  <- HAND-TYPED in most rows, so this is where a typo lands
     V = UJ KISKER NETTO   = U / 1.27
     W = UJ NAGYKER        = V - V*Y
-    X = UJ mikrosat atadoi= V * 0.74
+    X = UJ mikrosat atadoi= V * <a Parameterek lap "Mikrosat / Fotoplus netto arany" erteke>
     Z = mikrosat PDB arres= X / (G * 330)
 
 Usage: python3 scripts/kf-arazas-anomalia.py <xlsx>
@@ -103,9 +103,27 @@ def main():
             "brutto_keplet": keplet[C["brutto"]].value if isinstance(
                 keplet[C["brutto"]].value, str) and str(
                 keplet[C["brutto"]].value).startswith("=") else None,
+            "mikrosat_keplet": keplet[C["mikrosat"]].value if isinstance(
+                keplet[C["mikrosat"]].value, str) and str(
+                keplet[C["mikrosat"]].value).startswith("=") else None,
         })
 
-    print(f"HATOKOR: {len(sorok)} sor (arazni='i')\n")
+    # A MIKROSAT SZORZO A PARAMETEREK LAPROL JON, NEM BELE EGETVE (2026-10-06, mert hiba).
+    # Addig 0.74 allt a kodban, mert a v1 tabla azt hasznalta. David 10-02-an 172 sorban
+    # 0.75-re javitotta, es a 10-06-i valtozatban mind a 244 sor VISSZAALLT 0.74-re.
+    # A bele egetett konstans ekkor EGYETERTETT a visszaallt tablaval, tehat az 1. ellenorzes
+    # "0 talalat"-ot irt -- a szkript sajat elavult feltevese nemitotta el a valodi leletet.
+    # Ezert a referencia a Parameterek lap, es a szorzo-eloszlas kulon leletkent is megjelenik.
+    mikrosat_parameter = None
+    for sor in wb_v["Paraméterek"].iter_rows(min_row=2, values_only=True):
+        if sor[0] and "ikrosat" in str(sor[0]) and "arány" in str(sor[0]):
+            mikrosat_parameter = szam(sor[1])
+    if mikrosat_parameter is None:
+        mikrosat_parameter = 0.75
+        print("FIGYELEM: a Parameterek lapon nincs Mikrosat-arany, 0.75-tel szamolok.\n")
+
+    print(f"HATOKOR: {len(sorok)} sor (arazni='i')")
+    print(f"MIKROSAT SZORZO a Parameterek lap szerint: {mikrosat_parameter}\n")
     lelet = collections.OrderedDict()
 
     # 1. Belso konzisztencia: a keplet-oszlopok ertekei egyeznek-e a sajat kepletukkel.
@@ -119,9 +137,25 @@ def main():
         elvart_nagyker = r["netto"] - r["netto"] * r["kisker_arres"]
         if abs(r["nagyker"] - elvart_nagyker) > 1:
             baj.append((r, f"nagyker={r['nagyker']:.0f} != netto*(1-arres)={elvart_nagyker:.0f}"))
-        if abs(r["mikrosat"] - r["netto"] * 0.74) > 1:
-            baj.append((r, f"mikrosat={r['mikrosat']:.0f} != netto*0.74={r['netto']*0.74:.0f}"))
+        elvart_mikrosat = r["netto"] * mikrosat_parameter
+        if abs(r["mikrosat"] - elvart_mikrosat) > 1:
+            baj.append((r, f"mikrosat={r['mikrosat']:.0f} != "
+                           f"netto*{mikrosat_parameter}={elvart_mikrosat:.0f}"))
     lelet["1. BELSO KONZISZTENCIA (keplet-oszlopok)"] = baj
+
+    # 1b. A MIKROSAT SZORZO MINT KULON LELET. A fenti ellenorzes az ERTEKET meri; ez a
+    # KEPLETBEN allo szorzot, mert azt egy tomeges kitoltes vagy egy regebbi mentes
+    # visszaallithatja anelkul, hogy barmi mas valtozna. Csak az ELTEROT jelenti.
+    SZORZO_RX = re.compile(r"\*\s*(\d+[.,]\d+)\s*$")
+    baj = []
+    for r in sorok:
+        m = SZORZO_RX.search(r["mikrosat_keplet"] or "")
+        if not m:
+            continue
+        ertek = float(m.group(1).replace(",", "."))
+        if abs(ertek - mikrosat_parameter) > 1e-9:
+            baj.append((r, f"a keplet szorzoja {ertek}, a Parameterek lap {mikrosat_parameter}"))
+    lelet["1b. MIKROSAT SZORZO vs PARAMETEREK LAP"] = baj
 
     # 2. Nagysagrendi elutes: a PDB arres a kezzel beirt brutto egyetlen fuggvenye.
     arresek = [r["arres"] for r in sorok if r["arres"]]
