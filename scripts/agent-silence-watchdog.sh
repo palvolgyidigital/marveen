@@ -127,8 +127,44 @@ valid_id() {
 # Overridable for tests (mirrors MAIN_AGENT_ID/MAIN_INBOX_OBSERVER_DB-style env
 # overrides already used by main-inbox-observer.sh): AGENT_SILENCE_AGENTS_DIR
 # points discovery at a fixture tree instead of the real install's agents/.
+# Which agents carry INFORMATION when they go silent: only those that have at
+# least one ENABLED scheduled task. An on-demand agent (anna, bob) runs when a
+# colleague asks it something and is silent the rest of the time -- for those the
+# threshold can never be met, so the alert is guaranteed to fire forever.
+#
+# MEASURED, 2026-10-08, after Marci asked for the notification to stop: the alert
+# had been going out every 3 hours around the clock (23:46, 02:48, 05:50 ...) and
+# the content never changed -- [anna:51h bob:71h]. Both tmux sessions were ALIVE;
+# both have ZERO enabled scheduled tasks. So the watchdog was reporting "no work
+# was requested of them", dressed as an outage, and it drowned out the case it was
+# built for (card 53f4486a, the 54-hour fleet outage Zoli noticed).
+#
+# FAILS OPEN ON PURPOSE: if the scheduled-tasks directory is unreadable or the scan
+# finds nothing at all, every agent stays watched. A filter that cannot read its own
+# input must not silence the watchdog -- that would rebuild the blind spot.
+agents_with_scheduled_work() {
+  local tasks_dir
+  tasks_dir="${AGENT_SILENCE_TASKS_DIR:-$HOME/.claude/scheduled-tasks}"
+  [ -d "$tasks_dir" ] || return 1
+  python3 - "$tasks_dir" <<'PYEOF' 2>/dev/null
+import json, glob, os, sys
+nevek = set()
+for p in glob.glob(os.path.join(sys.argv[1], "*", "task-config.json")):
+    try:
+        j = json.load(open(p))
+    except Exception:
+        continue
+    if j.get("enabled", True) and j.get("agent"):
+        nevek.add(str(j["agent"]))
+if not nevek:          # nothing readable -> say nothing, caller keeps everyone
+    sys.exit(1)
+for n in sorted(nevek):
+    print(n)
+PYEOF
+}
+
 discover_agent_ids() {
-  local main_id d name agents_dir
+  local main_id d name agents_dir munkasok
   main_id="${MAIN_AGENT_ID:-}"
   if [ -z "$main_id" ]; then
     main_id="$(grep -E '^MAIN_AGENT_ID=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r "')"
@@ -136,12 +172,17 @@ discover_agent_ids() {
   [ -n "$main_id" ] || main_id="marveen"
   valid_id "$main_id" && printf '%s\n' "$main_id"
   agents_dir="${AGENT_SILENCE_AGENTS_DIR:-$INSTALL_DIR/agents}"
+  munkasok="$(agents_with_scheduled_work || true)"
   if [ -d "$agents_dir" ]; then
     for d in "$agents_dir"/*/; do
       [ -d "$d" ] || continue
       name="$(basename "$d")"
       valid_id "$name" || continue
       [ "$name" = "$main_id" ] && continue
+      # Ures `munkasok` = a szures nem tudott merni -> mindenkit figyelunk (fail open).
+      if [ -n "$munkasok" ] && ! printf '%s\n' "$munkasok" | grep -qxF "$name"; then
+        continue
+      fi
       printf '%s\n' "$name"
     done
   fi
