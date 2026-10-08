@@ -39,6 +39,8 @@ _LIMIT_PATH = os.path.join(_STORE_DIR, "uzenet-hossz-limitek.json")
 _OVERRIDE_PATH = os.path.join(_STORE_DIR, ".uzenet-hossz-gate-override.json")
 _LOG_PATH = os.path.join(_STORE_DIR, "outgoing-copy-gate.log")
 _OVERRIDE_TTL = 90
+# Ennyi masodpercig fogadjuk el UGYANANNAK a kuldesnek a tobbszoros hook-hivasait.
+_OVERRIDE_SEND_ABLAK = 15
 
 
 def _naploz(sor: str) -> None:
@@ -49,10 +51,22 @@ def _naploz(sor: str) -> None:
         pass
 
 
+def _atomi_iras(utvonal: str, adat: dict) -> None:
+    """A sima open(...,'w') CSONKOLJA a fajlt, es egy parhuzamosan olvaso hook ures
+    fajlt lathat -> json.load kivetel -> a kapu ugy dont, mintha nem lenne override.
+    Merve 2026-10-07 11:34: a ket regisztracio ugyanabban a masodpercben futott, az
+    egyik "felhasznalva"-t naplozott, a masik ugyanakkor BLOKK-ot. Ezert temp + replace."""
+    ideiglenes = utvonal + ".tmp"
+    with open(ideiglenes, "w", encoding="utf8") as fh:
+        json.dump(adat, fh, ensure_ascii=False)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(ideiglenes, utvonal)
+
+
 def write_override(indok: str, chat_id: str) -> None:
     payload = {"ts": int(time.time()), "chat_id": str(chat_id), "indok": indok}
-    with open(_OVERRIDE_PATH, "w", encoding="utf8") as fh:
-        json.dump(payload, fh, ensure_ascii=False)
+    _atomi_iras(_OVERRIDE_PATH, payload)
     _naploz("OVERRIDE keszult chat_id=" + str(chat_id) + " indok=" + indok)
     print("Override rogzitve (90 mp, egyszer hasznalhato), chat_id=" + str(chat_id))
 
@@ -65,14 +79,34 @@ def _override_elhasznal(chat_id: str) -> bool:
         return False
     if str(d.get("chat_id")) != str(chat_id):
         return False
-    if int(time.time()) - int(d.get("ts", 0)) > _OVERRIDE_TTL:
+    most = int(time.time())
+    if most - int(d.get("ts", 0)) > _OVERRIDE_TTL:
         return False
+    # EGY KULDESRE szol, nem egy HOOK-HIVASRA. Merve 2026-10-07: ez a kapu KET helyen van
+    # regisztralva (a HOME-szintu es a projekt .claude/settings.json-ban ugyanarra a
+    # matcherre), ezert minden kuldesnel KETSZER fut le. A regi, azonnal torlo alak igy
+    # hasznalhatatlan volt: az elso hivas elhasznalta es atengedett, a masodik mar nem
+    # talalta, es megallitotta ugyanazt a kuldest. A naplo mind a ketto korben
+    # "OVERRIDE felhasznalva"-t irt, miközben a kuldes blokkolodott.
+    # Ezert: az elso felhasznalas csak MEGJELOLI a fajlt, es a jelolestol szamitott
+    # _OVERRIDE_SEND_ABLAK masodpercen belul ugyanaz a chat_id meg atmehet. Utana torles.
+    elso = d.get("felhasznalva_ts")
+    if elso is None:
+        d["felhasznalva_ts"] = most
+        try:
+            _atomi_iras(_OVERRIDE_PATH, d)
+        except Exception:  # noqa: BLE001
+            pass
+        _naploz("OVERRIDE felhasznalva chat_id=" + str(chat_id))
+        return True
+    if most - int(elso) <= _OVERRIDE_SEND_ABLAK:
+        _naploz("OVERRIDE ismetelt hivas (ugyanaz a kuldes) chat_id=" + str(chat_id))
+        return True
     try:
-        os.remove(_OVERRIDE_PATH)  # egyszer hasznalhato
+        os.remove(_OVERRIDE_PATH)
     except Exception:  # noqa: BLE001
         pass
-    _naploz("OVERRIDE felhasznalva chat_id=" + str(chat_id))
-    return True
+    return False
 
 
 def _limit(chat_id: str):
