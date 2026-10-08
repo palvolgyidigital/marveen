@@ -66,6 +66,13 @@ const KANBAN_READONLY_FIELDS = new Set<string>([
   // done_evidence is written only by a move to done (see the /move route);
   // a whole-card PUT carries it back and must not 400 on it.
   'done_evidence',
+  // partner_id is the same shape, added with the CRM on 2026-10-08: a real column
+  // written only by linkCardToPartner (POST /api/partners/:id/cards), never by a
+  // PUT, and returned by SELECT * so the dashboard echoes it back. Leaving it out
+  // broke EVERY whole-card PUT with a 400, measured live on the running install
+  // and caught by CI on 66e55f0. Adding a column that SELECT * returns means
+  // checking this set.
+  'partner_id',
 ])
 
 // Every key POST /api/kanban/:id/move accepts; anything else is a 400, same
