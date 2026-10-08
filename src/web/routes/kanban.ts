@@ -73,6 +73,13 @@ const KANBAN_READONLY_FIELDS = new Set<string>([
   // never a column: the dashboard's whole-card PUT (assignee editor) carried it back
   // and every assignee change failed with 400 (measured 2026-11-03).
   'active_seconds',
+  // partner_id is the same shape, added with the CRM on 2026-10-08: a real column
+  // written only by linkCardToPartner (POST /api/partners/:id/cards), never by a
+  // PUT, and returned by SELECT * so the dashboard echoes it back. Leaving it out
+  // broke EVERY whole-card PUT with a 400, measured live on the running install
+  // and caught by CI on 66e55f0. Adding a column that SELECT * returns means
+  // checking this set.
+  'partner_id',
 ])
 
 // Every key POST /api/kanban/:id/move accepts; anything else is a 400, same
