@@ -2421,6 +2421,90 @@ export function ensureMessageCloseSection(name: string): void {
   atomicWriteFileSync(claudeMdPath, updated)
 }
 
+// ---- David's grants are fleet-wide (DAVIDGRANT1009) ----
+//
+// Marci's decision on 2026-10-09, verbatim on the paired owner channel:
+// "Engedd amit Dávid kér". David had asked three times, verbatim: "kérlek minden
+// asszisztensnek minden nekem elfogadott jogosultásgot is add át a többieknek",
+// "amit én megcsináltam átaható másnak is", "nincs olyan feladat amit nem
+// engednék meg".
+//
+// Why it ships as a generated section and not as a line in one agent's file:
+// the measured failure was a LOOKUP failure, not a missing permission. On
+// 2026-10-09 anna asked whether she could stamp a DHL customs authorisation;
+// the main agent said no and escalated, costing 16 minutes, while anna's own
+// CLAUDE.md had carried David's grant for exactly that document type since
+// 2026-10-02 ("jovobeli DHL-re igen"). David's words: "sok időt elvettél".
+// So the section carries both halves: the grant is fleet-wide, AND read the
+// grantee's permission block before telling anyone something cannot be done.
+const DAVIDGRANT_BEGIN = '<!-- BEGIN GENERATED: david-grants-fleetwide (auto-generated, do not edit by hand) -->'
+const DAVIDGRANT_END = '<!-- END GENERATED: david-grants-fleetwide -->'
+const DAVIDGRANT_BLOCK_RE = new RegExp(
+  `${DAVIDGRANT_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${DAVIDGRANT_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+)
+
+export function buildDavidGrantsBody(): string {
+  return [
+    '## David jogadásai a TELJES flottára szólnak (Marci döntése, 2026-10-09)',
+    '',
+    'Marci döntése, szó szerint, a párosított owner csatornáról: "Engedd amit Dávid kér".',
+    'David kérése, szó szerint, három üzenetben: "kérlek minden asszisztensnek minden nekem',
+    'elfogadott jogosultásgot is add át a többieknek", "amit én megcsináltam átaható másnak is",',
+    '"nincs olyan feladat amit nem engednék meg".',
+    '',
+    '**A SZABÁLY:** ha David egy feladatra engedélyt adott BÁRMELYIK asszisztensnek, az az engedély',
+    'MINDEN asszisztensre áll. Nem kell újra megkérdezni csak azért, mert az engedély eredetileg',
+    'másnak szólt. A jogadás a FELADATRA vonatkozik, nem a személyre, aki először megkapta.',
+    '',
+    '**HOL NÉZD MEG, MIT ADOTT MÁR:** az érintett ügynök `CLAUDE.md`-jének jogosultság-szakaszában,',
+    'a jóváhagyó nevével és dátumával. Mért példa: `agents/anna/CLAUDE.md` 2026-10-02 óta tartalmazza,',
+    'hogy a PDB pecsét plusz aláírás kép rátehető a DHL vámkezelési nyilatkozatra és az eseti vámjogi',
+    'képviseleti meghatalmazásra, a JÖVŐBENI DHL-papírokra is, külön kérdés nélkül. Ez a jog ettől a',
+    'döntéstől kezdve minden asszisztensre áll.',
+    '',
+    '**AMIRE NEM TERJED KI, és ez a döntés szűkítése, nem a tágítása:**',
+    '- Marci és Zoli SAJÁT jogadásai. Azok ügynökönként maradnak, ahogy megkapták.',
+    '- KIFELÉ küldés. A kész anyag Davidhez megy vissza, és ő viszi tovább. Vámhatóságnak,',
+    '  fuvarozónak, partnernek, vevőnek továbbra sem küldesz semmit magadtól.',
+    '- Olyan jog, amit David SOHA nem adott meg. Ez a szakasz a meglévő jogadásokat teríti szét,',
+    '  nem hoz létre újat.',
+    '',
+    '**ÉS EGY LÉPÉS A SZABÁLY ELŐTT, MERT A MAI HIBA NEM A JOG HIÁNYA VOLT, HANEM A MEG NEM NÉZÉSE:**',
+    'mielőtt kimondod valakinek, hogy egy lépés NEM mehet, OLVASD EL az érintett ügynök CLAUDE.md',
+    'jogosultság-szakaszát. 2026-10-09-én Anna rákérdezett a DHL-pecsételésre, a fő ügynök leállította',
+    'és jóváhagyásért eszkalált, holott a jog 2026-10-02 óta ott állt Anna saját fájljában. Tizenhat',
+    'perc ment el egy engedélyre, ami már megvolt. David szava erre: "sok időt elvettél".',
+    'A "nem mehet" a legdrágább mondat, mert lezár egy irányt; a forrás ellenőrzése egy olvasás.',
+  ].join('\n')
+}
+
+// Idempotently ensures the david-grants-fleetwide block is present and current
+// in the agent's CLAUDE.md; same contract as ensureMessageCloseSection, called
+// from the same two surfaces (web.ts for the main agent, agent-process.ts for
+// the rest).
+export function ensureDavidGrantsSection(name: string): void {
+  const claudeMdPath = name === MAIN_AGENT_ID
+    ? join(PROJECT_ROOT, 'CLAUDE.md')
+    : join(agentDir(name), 'CLAUDE.md')
+  if (!existsSync(claudeMdPath)) return
+
+  const block = `${DAVIDGRANT_BEGIN}\n${buildDavidGrantsBody()}\n${DAVIDGRANT_END}`
+
+  let existing: string
+  try {
+    existing = readFileSync(claudeMdPath, 'utf-8')
+  } catch {
+    return
+  }
+
+  const updated = DAVIDGRANT_BLOCK_RE.test(existing)
+    ? existing.replace(DAVIDGRANT_BLOCK_RE, block)
+    : existing.trimEnd() + '\n\n' + block + '\n'
+
+  if (updated === existing) return
+  atomicWriteFileSync(claudeMdPath, updated)
+}
+
 // Idempotently ensures the autonomy-wiring block is present and current in the
 // agent's CLAUDE.md. Called on every startAgentProcess() alongside
 // ensureFleetRosterSection() so that existing agents receive the block
