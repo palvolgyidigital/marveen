@@ -243,6 +243,93 @@ last_activity_epoch() {
 # "agent:age_h" entries) and UNKNOWN_LIST (agents with no baseline row at
 # all). Returns 0 = all within threshold, 1 = at least one silent beyond it,
 # 2 = db unreadable / nothing discoverable.
+# MIKOR KELLETT VOLNA DOLGOZNIA: az agens sajat, ENGEDELYEZETT utemezett feladatainak
+# legutobbi esedekes idopontja (epoch), most-hoz kepest visszafele. Ures kimenet =
+# nincs mivel merni (nincs feladat, nem olvashato a konyvtar, vagy a cron nem ertelmezheto),
+# ilyenkor a hivo FAIL OPEN modon jar el: marad a nemasag-verdikt.
+#
+# MIERT KELL (merve 2026-10-10, Marci jelzese utan): a 10-08-i szures csak azt nezte, VAN-E
+# az agensnek engedelyezett feladata. A ciliE mind a harom `* * 1-5`, vagyis HETKOZNAP fut.
+# Szombaton tehat a 24 oras hetvegi kuszob garantaltan atlepodik egy teljesen ep agensen, es
+# az ertesites haromoranként ujra ment, egesz hetvegen. Ugyanaz a hibaosztaly, amit a fenti
+# anna/bob-bejegyzes ir le: "nem kertunk tole munkat", kiesesnek oltoztetve.
+last_expected_run_epoch() {
+  local agent="$1" cutoff="$2" tasks_dir
+  tasks_dir="${AGENT_SILENCE_TASKS_DIR:-$HOME/.claude/scheduled-tasks}"
+  [ -d "$tasks_dir" ] || return 1
+  python3 - "$tasks_dir" "$agent" "$cutoff" <<'PYEOF' 2>/dev/null
+import json, glob, os, sys, time, datetime
+
+tasks_dir, agent, cutoff = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+def mezo_illeszkedik(mezo, ertek, minimum, maximum):
+    if mezo == "*":
+        return True
+    for resz in mezo.split(","):
+        lepes = 1
+        if "/" in resz:
+            resz, _, l = resz.partition("/")
+            if not l.isdigit():
+                raise ValueError(resz)
+            lepes = int(l)
+        if resz in ("*", ""):
+            also, felso = minimum, maximum
+        elif "-" in resz:
+            a, _, b = resz.partition("-")
+            also, felso = int(a), int(b)
+        else:
+            also = felso = int(resz)
+        if also <= ertek <= felso and (ertek - also) % lepes == 0:
+            return True
+    return False
+
+cronok = []
+for p in glob.glob(os.path.join(tasks_dir, "*", "task-config.json")):
+    try:
+        j = json.load(open(p))
+    except Exception:
+        continue
+    if str(j.get("agent", "")) != agent or not j.get("enabled", True):
+        continue
+    c = str(j.get("schedule", "")).split()
+    if len(c) == 5:
+        cronok.append(c)
+
+if not cronok:
+    sys.exit(1)          # nincs mivel merni -> a hivo fail-open
+
+# A GRACE-szel csokkentett idoponttol nezunk visszafele: minket az a legutobbi
+# esedekes futas erdekel, aminek MAR nyomot kellett volna hagynia.
+most = datetime.datetime.fromtimestamp(cutoff).replace(second=0, microsecond=0)
+legutobbi = None
+for eltelt in range(0, 14 * 24 * 60 + 1):     # 14 nap, percenkent visszafele
+    t = most - datetime.timedelta(minutes=eltelt)
+    for perc, ora, nap, honap, hetnap in cronok:
+        try:
+            if not mezo_illeszkedik(perc, t.minute, 0, 59): continue
+            if not mezo_illeszkedik(ora, t.hour, 0, 23): continue
+            if not mezo_illeszkedik(nap, t.day, 1, 31): continue
+            if not mezo_illeszkedik(honap, t.month, 1, 12): continue
+            dow = (t.weekday() + 1) % 7       # cron: 0=vasarnap
+            if not (mezo_illeszkedik(hetnap, dow, 0, 6)
+                    or (dow == 0 and mezo_illeszkedik(hetnap, 7, 0, 7))):
+                continue
+        except Exception:
+            sys.exit(1)                        # ertelmezhetetlen cron -> fail open
+        legutobbi = t
+        break
+    if legutobbi:
+        break
+
+if not legutobbi:
+    sys.exit(1)
+print(int(time.mktime(legutobbi.timetuple())))
+PYEOF
+}
+
+# Grace a vart futas utan: a feladat tuzelesetol a nyomhagyasig eltelhet ido.
+EXPECTED_RUN_GRACE=7200
+
 SILENT_LIST=""
 UNKNOWN_LIST=""
 evaluate_fleet() {
@@ -261,6 +348,14 @@ evaluate_fleet() {
     age=$(( now - epoch ))
     [ "$age" -ge 0 ] || age=0
     if [ "$age" -ge "$THRESHOLD_SECONDS" ]; then
+      # A kuszob atlepese onmagaban nem lelet: azt is meg kell nezni, hogy KELLETT-E
+      # volna dolgoznia azota. Ha a sajat cronja szerint nem volt esedekes futasa a
+      # legutobbi nyoma ota, a csend nem hordoz informaciot (hetvegen egy `1-5` cronu
+      # agens pontosan ilyen). FAIL OPEN: ha a cron nem merheto, marad a riasztas.
+      expected="$(last_expected_run_epoch "$agent" $(( now - EXPECTED_RUN_GRACE )))" || expected=""
+      if [ -n "$expected" ] && [ "$expected" -le "$epoch" ]; then
+        continue
+      fi
       SILENT_LIST="$SILENT_LIST ${agent}:$(( age / 3600 ))h"
     fi
   done <<EOF_AGENTS
@@ -316,7 +411,7 @@ alert_owner() {
 }
 
 main() {
-  local db rc now last msg
+  local db rc now last last_set msg
   mkdir -p "$STORE_DIR" 2>/dev/null || true
   db="${AGENT_SILENCE_DB:-$DB_DEFAULT}"
   evaluate_fleet "$db"; rc=$?
@@ -333,17 +428,29 @@ main() {
     return 0
   fi
 
-  last=0; [ -f "$ALERT_STAMP" ] && last="$(cat "$ALERT_STAMP" 2>/dev/null || echo 0)"
+  # A belyeg ket mezot tarol: "<epoch>|<akkori nema-lista>". A masodik mezo miatt egy
+  # VALTOZATLAN allapot nem riaszt ujra (merve 2026-10-10: a `cili` ugyanazzal a
+  # leletel haromoranként ment ki, egesz ejjel). Valtozo lista -> azonnal riaszt;
+  # valtozatlan -> legfeljebb naponta egyszer emlekeztet.
+  last=0; last_set=""
+  if [ -f "$ALERT_STAMP" ]; then
+    last="$(cut -d'|' -f1 "$ALERT_STAMP" 2>/dev/null || echo 0)"
+    last_set="$(cut -d'|' -f2- "$ALERT_STAMP" 2>/dev/null || echo '')"
+  fi
   case "$last" in (''|*[!0-9]*) last=0;; esac
   if [ $(( now - last )) -lt "$ALERT_COOLDOWN" ]; then
     log "verdict=silent ([${SILENT_LIST# }]) but within alert cooldown ($(( now - last ))s) -- skip alert"
+    return 0
+  fi
+  if [ "${SILENT_LIST# }" = "$last_set" ] && [ $(( now - last )) -lt 86400 ]; then
+    log "verdict=silent ([${SILENT_LIST# }]) but UNCHANGED since last alert ($(( now - last ))s ago) -- skip alert"
     return 0
   fi
 
   msg="🔴 Nema agens(ek) eszlelve (${THRESHOLD_LABEL} kuszob, ${THRESHOLD_HOURS}h): [${SILENT_LIST# }]. Egyik forrasban sincs ujabb nyom (memoria, napi naplo, eszkoz-hivas, csatorna-uzenet). Ha ez tobb agenst erint egyszerre, nezd meg a tmux session-oket es a dashboard folyamatot elkulonitve -- a 2026-09-26/28-i kiesesnel a scheduler futott, az agensek megis nemak voltak."
   log "$msg"
   if alert_owner "$msg"; then
-    echo "$now" > "$ALERT_STAMP" 2>/dev/null || true
+    echo "$now|${SILENT_LIST# }" > "$ALERT_STAMP" 2>/dev/null || true
   else
     log "alert not delivered -- cooldown stamp NOT written, will retry next tick"
   fi
