@@ -148,11 +148,33 @@ def main() -> int:
                    + ", ".join(f"{k} ({v} futas)" for k, v in sorted(tartos.items())))
 
     fuggo = varakozo = None
+    varakozo_reszletek: list[str] = []
     try:
         with open(SAM_STATE, encoding="utf-8") as fh:
             st = json.load(fh)
         fuggo = len(st.get("pending_orders") or {})
-        varakozo = len(st.get("notified_orders") or {})
+        ert = st.get("notified_orders") or {}
+        varakozo = len(ert)
+        # DAVID KERESE, 2026-10-12 08:42 (Telegram 9140), szo szerint: "Melyik, mikor
+        # hianyzik? Fontos, hogy ezt jobban emeld ki a levelben". Addig a riport CSAK a
+        # darabszamot adta, es o maga irta, hogy ezert nem vette eszre. Egy szam nem
+        # cselekvesre hivo informacio: a rendelesszam, az aruhaz es a datumok azok.
+        for rend, adat in sorted(ert.items()):
+            if not isinstance(adat, dict):
+                varakozo_reszletek.append(f"{rend}")
+                continue
+            reszek = [str(rend)]
+            if adat.get("store"):
+                reszek.append(str(adat["store"]))
+            if adat.get("delivery_date"):
+                reszek.append("szállítási dátum " + str(adat["delivery_date"]))
+            tetelszam = len(adat.get("articles") or [])
+            if tetelszam:
+                reszek.append(f"{tetelszam} tétel")
+            jelzes = str(adat.get("notified_at") or "")[:10]
+            if jelzes:
+                reszek.append("jelezve " + jelzes)
+            varakozo_reszletek.append(", ".join(reszek))
         kor = dt.datetime.fromtimestamp(os.path.getmtime(SAM_STATE), dt.timezone.utc)
         if kor < most() - dt.timedelta(hours=30):
             baj.append("A Relex-osszevetes allapota 30 oranal regebbi ("
@@ -192,6 +214,14 @@ def main() -> int:
                 f"Lefutott betöltés: {len(latott)} óra a várt {ORAK}-ból.",
                 f"Relex-oldali függő rendelés: {fuggo if fuggo is not None else 'nem mérhető'}.",
                 f"Korábban jelzett hiányzó EDI-átvitel: {varakozo if varakozo is not None else 'nem mérhető'}."]
+    if varakozo_reszletek:
+        sorokki += ["",
+                    ("FIGYELEM, EZ A TÉTEL MÉG NYITOTT, nem a mai napról szól:"
+                     if len(varakozo_reszletek) == 1 else
+                     f"FIGYELEM, {len(varakozo_reszletek)} TÉTEL MÉG NYITOTT, egyik sem a mai napról szól:")]
+        sorokki += ["  - " + s for s in varakozo_reszletek]
+        sorokki.append("Ez azt jelenti, hogy a Relex-levél megjött, de EDI-átvitel nem párosult hozzá,")
+        sorokki.append("és a jelzés a fenti napon egyszer már kiment.")
     if elakadt and not tartos:
         sorokki.append("Egy futásban függőben maradt, a következő óra újrapróbálta: "
                        + ", ".join(sorted(elakadt)) + ".")
