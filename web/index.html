@@ -310,16 +310,24 @@
 
       <!-- Board-specific filter row (hidden when gantt active) -->
       <div id="kanbanBoardFilters" style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <label for="kanbanProjectFilter" style="font-size:13px;color:var(--muted);white-space:nowrap;">Projekt:</label>
-        <select id="kanbanProjectFilter" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);min-width:140px;">
-          <option value="">Mind</option>
-        </select>
-        <label for="kanbanGroupBy" style="font-size:13px;color:var(--muted);white-space:nowrap;margin-left:8px;" data-i18n="kanban.filter.group_label">Csoportosítás:</label>
-        <select id="kanbanGroupBy" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);min-width:140px;">
-          <option value="none" data-i18n="kanban.filter.group_none">Nincs</option>
-          <option value="assignee" data-i18n="kanban.filter.group_assignee">Felelős szerint</option>
-          <option value="priority" data-i18n="kanban.filter.group_priority">Prioritás szerint</option>
-        </select>
+        <!-- A felirat es a sajat legorduloje egy nem-tordelo csoportban ul, kulonben
+             keskeny kepernyon (es a jobbra tolt chip-sor miatt szelesen is) a cimke
+             az elozo sor vegen marad, a vezerlo meg a kovetkezo sor elejere ugrik.
+             Merve 2026-10-09, David jelzesere. -->
+        <span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">
+          <label for="kanbanProjectFilter" style="font-size:13px;color:var(--muted);white-space:nowrap;">Projekt:</label>
+          <select id="kanbanProjectFilter" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);min-width:140px;">
+            <option value="">Mind</option>
+          </select>
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;margin-left:8px;">
+          <label for="kanbanGroupBy" style="font-size:13px;color:var(--muted);white-space:nowrap;" data-i18n="kanban.filter.group_label">Csoportosítás:</label>
+          <select id="kanbanGroupBy" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);min-width:140px;">
+            <option value="none" data-i18n="kanban.filter.group_none">Nincs</option>
+            <option value="assignee" data-i18n="kanban.filter.group_assignee">Felelős szerint</option>
+            <option value="priority" data-i18n="kanban.filter.group_priority">Prioritás szerint</option>
+          </select>
+        </span>
         <span id="kanbanColumnChipsLabel" style="font-size:13px;color:var(--muted);white-space:nowrap;margin-left:8px;" data-i18n="kanban.filter.columns_label">Oszlopok:</span>
         <div id="kanbanColumnChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;"></div>
         <div class="kanban-quick-filters" id="kanbanQuickFilters" style="margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>
@@ -2131,34 +2139,6 @@
           <select id="parentSelect" style="flex:1; width:100%; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px" title="Szülő feladat módosítása"></select>
         </div>
         <div class="card-detail-desc" id="cardDetailDesc"></div>
-        <div class="card-detail-labels">
-          <h4 data-i18n="kanban.modal.labels_title">Címkék</h4>
-          <div class="label-pill-list" id="cardLabelList"></div>
-          <div class="form-row" style="gap:8px; align-items:center; margin-top:6px">
-            <select id="cardLabelAdd" style="flex:1; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px">
-              <option value="" data-i18n="kanban.label.add_placeholder">-- Meglévő címke hozzáadása --</option>
-            </select>
-            <button class="btn-secondary btn-compact" id="cardLabelNewBtn" data-i18n="kanban.detail.new_label">+ Új címke</button>
-          </div>
-          <div class="form-row" id="cardLabelNewForm" style="display:none; gap:8px; align-items:center; margin-top:6px">
-            <input type="text" id="cardLabelNewName" placeholder="Címke neve (pl. bug)" data-i18n-placeholder="kanban.label.new_ph" style="flex:1; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px">
-            <div class="label-color-swatches" id="cardLabelNewColors"></div>
-            <button class="btn-primary btn-compact" id="cardLabelNewSaveBtn" data-i18n="common.btn.save">Mentés</button>
-          </div>
-        </div>
-        <div class="card-detail-blockers">
-          <h4 data-i18n="kanban.modal.blockers_title">Blokkolja</h4>
-          <div class="blocker-list" id="cardBlockerList"></div>
-          <div class="form-row" style="gap:8px; align-items:center; margin-top:6px">
-            <select id="cardBlockerAdd" style="flex:1; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px">
-              <option value="" data-i18n="kanban.blocker.add_placeholder">-- Blokkoló kártya hozzáadása --</option>
-            </select>
-          </div>
-          <div id="cardBlockingWrap" style="display:none; margin-top:10px">
-            <h4 data-i18n="kanban.modal.blocking_title">Erre a kártyára várnak</h4>
-            <div class="blocker-list" id="cardBlockingList"></div>
-          </div>
-        </div>
         <div class="card-detail-comments">
           <h4 data-i18n="kanban.modal.comments_title">Megjegyzések</h4>
           <div class="comments-list" id="commentsList"></div>
@@ -2175,6 +2155,34 @@
             </div>
           </div>
         </div>
+        <div class="card-detail-labels" id="cardLabelsSection">
+          <h4 data-i18n="kanban.modal.labels_title">Címkék</h4>
+          <div class="label-pill-list" id="cardLabelList"></div>
+          <div class="form-row" style="gap:8px; align-items:center; margin-top:6px">
+            <select id="cardLabelAdd" style="flex:1; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px">
+              <option value="" data-i18n="kanban.label.add_placeholder">-- Meglévő címke hozzáadása --</option>
+            </select>
+            <button class="btn-secondary btn-compact" id="cardLabelNewBtn" data-i18n="kanban.detail.new_label">+ Új címke</button>
+          </div>
+          <div class="form-row" id="cardLabelNewForm" style="display:none; gap:8px; align-items:center; margin-top:6px">
+            <input type="text" id="cardLabelNewName" placeholder="Címke neve (pl. bug)" data-i18n-placeholder="kanban.label.new_ph" style="flex:1; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px">
+            <div class="label-color-swatches" id="cardLabelNewColors"></div>
+            <button class="btn-primary btn-compact" id="cardLabelNewSaveBtn" data-i18n="common.btn.save">Mentés</button>
+          </div>
+        </div>
+        <div class="card-detail-blockers" id="cardBlockersSection">
+          <h4 data-i18n="kanban.modal.blockers_title">Blokkolja</h4>
+          <div class="blocker-list" id="cardBlockerList"></div>
+          <div class="form-row" style="gap:8px; align-items:center; margin-top:6px">
+            <select id="cardBlockerAdd" style="flex:1; padding:5px 8px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px">
+              <option value="" data-i18n="kanban.blocker.add_placeholder">-- Blokkoló kártya hozzáadása --</option>
+            </select>
+          </div>
+          <div id="cardBlockingWrap" style="display:none; margin-top:10px">
+            <h4 data-i18n="kanban.modal.blocking_title">Erre a kártyára várnak</h4>
+            <div class="blocker-list" id="cardBlockingList"></div>
+          </div>
+        </div>
 
         <div id="cardChildrenSection" style="display:none; margin-top:12px">
           <h4 data-i18n="kanban.modal.subtasks_title">Subtask-ok</h4>
@@ -2187,6 +2195,8 @@
           </div>
         </div>
         <div class="detail-actions" style="gap:8px">
+          <button class="btn-primary" id="cardCloseBtn" data-i18n="kanban.btn.close_card">✓ Lezárás</button>
+          <button class="btn-secondary" id="cardEmailBtn" style="display:none" data-i18n="kanban.btn.email">✉ Email</button>
           <button class="btn-secondary" id="cardBreakdownBtn">⚡ <span data-i18n="kanban.modal.breakdown_btn">AI szétbont</span></button>
           <button class="btn-secondary" id="cardEditBtn" data-i18n="common.btn.edit">Szerkesztés</button>
           <button class="btn-secondary" id="cardArchiveBtn" data-i18n="kanban.btn.archive">Archiválás</button>
