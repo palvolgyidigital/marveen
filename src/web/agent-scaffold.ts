@@ -1284,42 +1284,6 @@ export const ROOT_ONLY_RULE_GROUPS = ['kanban-write rule (card tool, not raw SQL
 // `extraHooksPath` is a test seam (the install-local extras file); production
 // callers pass nothing and get store/extra-hooks.json.
 export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemplate, extraHooksPath?: string): void {
-
-// Idempotent migration: ensure the message-dedup-guard UserPromptSubmit hook
-// is present (ea2eb050, 2026-08-26). Same merge shape as ensureAgentStaleness
-// Hook -- reaches the existing fleet, not just freshly-scaffolded agents.
-// This is the mechanical backstop half of the ea2eb050 fix: the sender-side
-// confirmation check (confirmsDeliveryDespitePriorBusy) closes most of the
-// silent-loss risk before a message is ever resent, but cannot reach zero on
-// its own (scrollback is bounded); this hook makes a resend of a message that
-// had, in fact, already landed a harmless no-op instead of a duplicate turn.
-// Fail-open wrapper, same reasoning as the staleness guard's.
-const _dedupGuardScript = join(PROJECT_ROOT, 'scripts', 'hooks', 'message-dedup-guard.py')
-const DEDUP_GUARD_HOOK_CMD = `bash -c '[ -f ${_dedupGuardScript} ] && exec python3 ${_dedupGuardScript}; exit 0'`
-
-export function ensureMessageDedupGuardHook(name: string): boolean {
-  if (refuseMainAgentHookWrite(name, 'ensureMessageDedupGuardHook')) return false
-  const settingsPath = agentSettingsPath(name)
-  let settings: Record<string, unknown> = {}
-  if (existsSync(settingsPath)) {
-    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
-  }
-  const hooks = (settings.hooks && typeof settings.hooks === 'object')
-    ? settings.hooks as Record<string, unknown>
-    : {}
-  const ups = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit as unknown[] : []
-  const already = JSON.stringify(ups).includes('message-dedup-guard.py')
-  if (already) return false
-  if (isUnsafeHookCommand(DEDUP_GUARD_HOOK_CMD)) return false
-  ups.push({ hooks: [{ type: 'command', command: DEDUP_GUARD_HOOK_CMD, timeout: 10 }] })
-  hooks.UserPromptSubmit = ups
-  settings.hooks = hooks
-  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
-  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
-  return true
-}
-
-export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemplate): void {
   const agentRoot = agentDir(name)
   const settingsDir = join(agentRoot, '.claude')
   const settingsPath = join(settingsDir, 'settings.json')
@@ -1492,6 +1456,40 @@ export function sanitizeAgentLocalSettings(name: string): 'absent' | 'clean' | '
   if (!stripLooseningKeys(obj, name, 'settings.local.json').length) return 'clean'
   atomicWriteFileSync(p, JSON.stringify(obj, null, 2))
   return 'stripped'
+}
+
+// Idempotent migration: ensure the message-dedup-guard UserPromptSubmit hook
+// is present (ea2eb050, 2026-08-26). Same merge shape as ensureAgentStaleness
+// Hook -- reaches the existing fleet, not just freshly-scaffolded agents.
+// This is the mechanical backstop half of the ea2eb050 fix: the sender-side
+// confirmation check (confirmsDeliveryDespitePriorBusy) closes most of the
+// silent-loss risk before a message is ever resent, but cannot reach zero on
+// its own (scrollback is bounded); this hook makes a resend of a message that
+// had, in fact, already landed a harmless no-op instead of a duplicate turn.
+// Fail-open wrapper, same reasoning as the staleness guard's.
+const _dedupGuardScript = join(PROJECT_ROOT, 'scripts', 'hooks', 'message-dedup-guard.py')
+const DEDUP_GUARD_HOOK_CMD = `bash -c '[ -f ${_dedupGuardScript} ] && exec python3 ${_dedupGuardScript}; exit 0'`
+
+export function ensureMessageDedupGuardHook(name: string): boolean {
+  if (refuseMainAgentHookWrite(name, 'ensureMessageDedupGuardHook')) return false
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ups = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit as unknown[] : []
+  const already = JSON.stringify(ups).includes('message-dedup-guard.py')
+  if (already) return false
+  if (isUnsafeHookCommand(DEDUP_GUARD_HOOK_CMD)) return false
+  ups.push({ hooks: [{ type: 'command', command: DEDUP_GUARD_HOOK_CMD, timeout: 10 }] })
+  hooks.UserPromptSubmit = ups
+  settings.hooks = hooks
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
 }
 
 // Install-local extra hook entries (store/extra-hooks.json), see
@@ -4433,6 +4431,90 @@ export function ensurePaneAtEscapeSection(name: string): void {
 
   const updated = PANEATESC_BLOCK_RE.test(existing)
     ? existing.replace(PANEATESC_BLOCK_RE, () => block)
+    : existing.trimEnd() + '\n\n' + block + '\n'
+
+  if (updated === existing) return
+  atomicWriteFileSync(claudeMdPath, updated)
+}
+
+// ---- David's grants are fleet-wide (DAVIDGRANT1009) ----
+//
+// Marci's decision on 2026-10-09, verbatim on the paired owner channel:
+// "Engedd amit Dávid kér". David had asked three times, verbatim: "kérlek minden
+// asszisztensnek minden nekem elfogadott jogosultásgot is add át a többieknek",
+// "amit én megcsináltam átaható másnak is", "nincs olyan feladat amit nem
+// engednék meg".
+//
+// Why it ships as a generated section and not as a line in one agent's file:
+// the measured failure was a LOOKUP failure, not a missing permission. On
+// 2026-10-09 anna asked whether she could stamp a DHL customs authorisation;
+// the main agent said no and escalated, costing 16 minutes, while anna's own
+// CLAUDE.md had carried David's grant for exactly that document type since
+// 2026-10-02 ("jovobeli DHL-re igen"). David's words: "sok időt elvettél".
+// So the section carries both halves: the grant is fleet-wide, AND read the
+// grantee's permission block before telling anyone something cannot be done.
+const DAVIDGRANT_BEGIN = '<!-- BEGIN GENERATED: david-grants-fleetwide (auto-generated, do not edit by hand) -->'
+const DAVIDGRANT_END = '<!-- END GENERATED: david-grants-fleetwide -->'
+const DAVIDGRANT_BLOCK_RE = new RegExp(
+  `${DAVIDGRANT_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${DAVIDGRANT_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+)
+
+export function buildDavidGrantsBody(): string {
+  return [
+    '## David jogadásai a TELJES flottára szólnak (Marci döntése, 2026-10-09)',
+    '',
+    'Marci döntése, szó szerint, a párosított owner csatornáról: "Engedd amit Dávid kér".',
+    'David kérése, szó szerint, három üzenetben: "kérlek minden asszisztensnek minden nekem',
+    'elfogadott jogosultásgot is add át a többieknek", "amit én megcsináltam átaható másnak is",',
+    '"nincs olyan feladat amit nem engednék meg".',
+    '',
+    '**A SZABÁLY:** ha David egy feladatra engedélyt adott BÁRMELYIK asszisztensnek, az az engedély',
+    'MINDEN asszisztensre áll. Nem kell újra megkérdezni csak azért, mert az engedély eredetileg',
+    'másnak szólt. A jogadás a FELADATRA vonatkozik, nem a személyre, aki először megkapta.',
+    '',
+    '**HOL NÉZD MEG, MIT ADOTT MÁR:** az érintett ügynök `CLAUDE.md`-jének jogosultság-szakaszában,',
+    'a jóváhagyó nevével és dátumával. Mért példa: `agents/anna/CLAUDE.md` 2026-10-02 óta tartalmazza,',
+    'hogy a PDB pecsét plusz aláírás kép rátehető a DHL vámkezelési nyilatkozatra és az eseti vámjogi',
+    'képviseleti meghatalmazásra, a JÖVŐBENI DHL-papírokra is, külön kérdés nélkül. Ez a jog ettől a',
+    'döntéstől kezdve minden asszisztensre áll.',
+    '',
+    '**AMIRE NEM TERJED KI, és ez a döntés szűkítése, nem a tágítása:**',
+    '- Marci és Zoli SAJÁT jogadásai. Azok ügynökönként maradnak, ahogy megkapták.',
+    '- KIFELÉ küldés. A kész anyag Davidhez megy vissza, és ő viszi tovább. Vámhatóságnak,',
+    '  fuvarozónak, partnernek, vevőnek továbbra sem küldesz semmit magadtól.',
+    '- Olyan jog, amit David SOHA nem adott meg. Ez a szakasz a meglévő jogadásokat teríti szét,',
+    '  nem hoz létre újat.',
+    '',
+    '**ÉS EGY LÉPÉS A SZABÁLY ELŐTT, MERT A MAI HIBA NEM A JOG HIÁNYA VOLT, HANEM A MEG NEM NÉZÉSE:**',
+    'mielőtt kimondod valakinek, hogy egy lépés NEM mehet, OLVASD EL az érintett ügynök CLAUDE.md',
+    'jogosultság-szakaszát. 2026-10-09-én Anna rákérdezett a DHL-pecsételésre, a fő ügynök leállította',
+    'és jóváhagyásért eszkalált, holott a jog 2026-10-02 óta ott állt Anna saját fájljában. Tizenhat',
+    'perc ment el egy engedélyre, ami már megvolt. David szava erre: "sok időt elvettél".',
+    'A "nem mehet" a legdrágább mondat, mert lezár egy irányt; a forrás ellenőrzése egy olvasás.',
+  ].join('\n')
+}
+
+// Idempotently ensures the david-grants-fleetwide block is present and current
+// in the agent's CLAUDE.md; same contract as ensureMessageCloseSection, called
+// from the same two surfaces (web.ts for the main agent, agent-process.ts for
+// the rest).
+export function ensureDavidGrantsSection(name: string): void {
+  const claudeMdPath = name === MAIN_AGENT_ID
+    ? join(PROJECT_ROOT, 'CLAUDE.md')
+    : join(agentDir(name), 'CLAUDE.md')
+  if (!existsSync(claudeMdPath)) return
+
+  const block = `${DAVIDGRANT_BEGIN}\n${buildDavidGrantsBody()}\n${DAVIDGRANT_END}`
+
+  let existing: string
+  try {
+    existing = readFileSync(claudeMdPath, 'utf-8')
+  } catch {
+    return
+  }
+
+  const updated = DAVIDGRANT_BLOCK_RE.test(existing)
+    ? existing.replace(DAVIDGRANT_BLOCK_RE, () => block)
     : existing.trimEnd() + '\n\n' + block + '\n'
 
   if (updated === existing) return
