@@ -90,7 +90,12 @@ def garancias(torzs_szoveg, targy=''):
     Szukebb, mint a puszta substring: egy alairasba keveredett cim nem hamis pozitiv.
     Visszaad (talalat_bool, indok_str).
     """
-    sorok = re.findall(r'(?:C[íi]mzett|To|Kedves|Recipient)\s*:\s*([^\n]{0,400})', torzs_szoveg or '')
+    # A MASOLAT-SOR IS CIMZETT-SOR. Merve 2026-10-16 14:3x: a ZUPP-os visszaru-szalban
+    # (PALVOLGYI DIGITAL KNE visszaru 5399981) a garancia@pdb.hu a 'Masolatot kap' sorban
+    # all, nem a 'Cimzett'-ben, ezert a cim-alapu ERŐS ag nem fogott, es csak a gyengebb,
+    # 'csak torzs-elofordulas' lab jelzett. Az ertelme ugyanaz: a cim egy CIMZETT-MEZOBEN
+    # szerepel, nem egy alairasban. A Cc es a 'Masolatot kap' ezert ide tartozik.
+    sorok = re.findall(r'(?:C[íi]mzett|M[áa]solatot kap|Cc|To|Kedves|Recipient)\s*:\s*([^\n]{0,400})', torzs_szoveg or '')
     for s in sorok:
         if GARANCIA_CIM in s.lower():
             return True, 'Cimzett-sor: ' + s.strip()[:160]
