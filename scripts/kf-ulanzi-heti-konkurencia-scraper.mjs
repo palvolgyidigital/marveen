@@ -601,14 +601,38 @@ function buildNameTokIndex(items) {
   return idx;
 }
 
+// MARKA-SZEGREGALT indexek. A suffix() szandekosan leszedi a "KF-"/"UL-" elotagot
+// (mert tobb oldal -- pl. fotoplus az Ulanzi csaladnal -- a sajat belso kodjaban
+// elhagyja a markajelzest, csak a szam/modell-resz marad), DE ez onmagaban azt
+// jelentette, hogy egy K&F-es "KF-2245" es egy EGESZEN MAS Ulanzi "UL-2245" ugyanarra
+// a "2245" kulcsra normalizalodott -- 2026-10-16-i hiba (cikkszam 14549, Ulanzi U200
+// rig a sajat pdb.hu "KF-2245" szemkagylo-tartozekara parositva, 990 Ft-os hamis ar).
+// A JAVITAS: a keresesi lekerdezes (K&F Concept vs Ulanzi) MAR ELORE szetvalasztja a
+// talalatokat markankent -- ezert a sajat cikk "gyarto" mezoje alapjan KIZAROLAG a
+// MEGFELELO marka indexeben keresunk, a masik marka indexe fizikailag nem is latszik.
+function brandKeyOf(gyarto) {
+  return /ULANZI/i.test(gyarto || '') ? 'ULANZI' : 'KF';
+}
+
+function buildBrandCodeIndexes(kfItems, ulItems) {
+  return { KF: buildCodeIndex(kfItems), ULANZI: buildCodeIndex(ulItems) };
+}
+
+function buildBrandNameTokIndexes(kfItems, ulItems) {
+  return { KF: buildNameTokIndex(kfItems), ULANZI: buildNameTokIndex(ulItems) };
+}
+
 // Kod-elsobbsegu parositas, allvany-csalad eseten nev-alapu fallback-kel.
+// codeIndexes/nameTokIndexes: {KF: Map, ULANZI: Map} -- CSAK a sajat cikk markajanak
+// megfelelo Map-ben keresunk, a masikat nem is erjuk el.
 // Visszaad: {item, status: OK|AMBIGUOUS|MISSING|NOT_ATTEMPTED, method: CODE|NAME|NONE}
-function matchRow(ownRow, codeIndex, nameTokIndex, { allowNameFallback }) {
-  let [item, status] = matchByCodeSuffix(ownRow.gyartoi_cikkszam, codeIndex);
+function matchRow(ownRow, codeIndexes, nameTokIndexes, { allowNameFallback }) {
+  const brand = brandKeyOf(ownRow.gyarto);
+  let [item, status] = matchByCodeSuffix(ownRow.gyartoi_cikkszam, codeIndexes[brand]);
   let method = 'CODE';
   if (status === 'MISSING') {
     if (allowNameFallback && STAND_CATEGORIES.has(ownRow.cikkcsoport)) {
-      [item, status] = matchByNameToken(ownRow.nev, nameTokIndex);
+      [item, status] = matchByNameToken(ownRow.nev, nameTokIndexes[brand]);
       method = status === 'OK' ? 'NAME' : 'NAME_ATTEMPT';
     } else if (allowNameFallback) {
       status = 'NOT_ATTEMPTED';
@@ -619,12 +643,14 @@ function matchRow(ownRow, codeIndex, nameTokIndex, { allowNameFallback }) {
   return { item, status, method };
 }
 
-// studioeszkozok-specifikus: SOHA nincs kod, csak nev-alapu, csak allvany-csaladra
-function matchRowNameOnly(ownRow, nameTokIndex) {
+// studioeszkozok-specifikus: SOHA nincs kod, csak nev-alapu, csak allvany-csaladra.
+// nameTokIndexes: {KF: Map, ULANZI: Map} -- markankent szetvalasztva.
+function matchRowNameOnly(ownRow, nameTokIndexes) {
   if (!STAND_CATEGORIES.has(ownRow.cikkcsoport)) {
     return { item: null, status: 'NOT_ATTEMPTED', method: 'NONE' };
   }
-  const [item, status] = matchByNameToken(ownRow.nev, nameTokIndex);
+  const brand = brandKeyOf(ownRow.gyarto);
+  const [item, status] = matchByNameToken(ownRow.nev, nameTokIndexes[brand]);
   return { item, status, method: status === 'OK' ? 'NAME' : 'NAME_ATTEMPT' };
 }
 
@@ -787,22 +813,23 @@ async function main() {
 
   await browser.close();
 
-  // --- Indexek felepitese ---
-  const pdbIndex = buildCodeIndex([...pdbKf.items, ...pdbUl.items]);
-  const fotoIndex = buildCodeIndex([...fotoKf.items, ...fotoUl.items]);
-  const kamIndex = buildCodeIndex([...kamKf.items, ...kamUl.items]);
-  const studioNameIndex = buildNameTokIndex([...studioKf.items, ...studioUl.items]);
-  const synCodeIndex = buildCodeIndex([...synKf.items, ...synUl.items]);
-  const synNameIndex = buildNameTokIndex([...synKf.items, ...synUl.items]);
+  // --- Indexek felepitese, MARKA-SZEGREGALTAN (lasd a fuggveny-definicio
+  // kommentjeben a 2026-10-16-i hiba leirasat -- cikkszam 14549) ---
+  const pdbIndex = buildBrandCodeIndexes(pdbKf.items, pdbUl.items);
+  const fotoIndex = buildBrandCodeIndexes(fotoKf.items, fotoUl.items);
+  const kamIndex = buildBrandCodeIndexes(kamKf.items, kamUl.items);
+  const studioNameIndex = buildBrandNameTokIndexes(studioKf.items, studioUl.items);
+  const synCodeIndex = buildBrandCodeIndexes(synKf.items, synUl.items);
+  const synNameIndex = buildBrandNameTokIndexes(synKf.items, synUl.items);
   const uniCodeIndexFromName = (() => {
     // unidomestore: nincs kulon code mezo, de a nevben neha benne van (pl. "KF-V99") --
     // a 2026-10-16-i felderites szerint ez ritkan ad biztonsagos egyezest, ezert itt
     // csak a nev-alapu allvany-csalad fallback-ot hasznaljuk, kod-indexet nem epitunk.
-    return new Map();
+    return { KF: new Map(), ULANZI: new Map() };
   })();
-  const uniNameIndex = buildNameTokIndex([...uniKf.items, ...uniUl.items]);
-  const ftCodeIndex = buildCodeIndex([...ftKf.items, ...ftUl.items]);
-  const ftNameIndex = buildNameTokIndex([...ftKf.items, ...ftUl.items]);
+  const uniNameIndex = buildBrandNameTokIndexes(uniKf.items, uniUl.items);
+  const ftCodeIndex = buildBrandCodeIndexes(ftKf.items, ftUl.items);
+  const ftNameIndex = buildBrandNameTokIndexes(ftKf.items, ftUl.items);
 
   // --- Parositas minden sajat cikkre ---
   const finalRows = [];
@@ -815,7 +842,8 @@ async function main() {
   const tsLabel = nowLabelBudapest();
 
   for (const row of ownCatalog) {
-    const ownItem = (pdbIndex.get(suffix(row.gyartoi_cikkszam)) || [])[0];
+    const ownBrand = brandKeyOf(row.gyarto);
+    const [ownItem] = matchByCodeSuffix(row.gyartoi_cikkszam, pdbIndex[ownBrand]);
     const ownPrice = ownItem ? ownItem.price : null;
     const ownUrl = ownItem ? ownItem.href : null;
     if (ownPrice != null) stats.own += 1;
