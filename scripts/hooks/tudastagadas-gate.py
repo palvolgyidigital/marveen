@@ -72,6 +72,7 @@ _STORE_DIR = os.path.join(os.path.dirname(_SCRIPTS_DIR), "store")
 _OVERRIDE_PATH = os.path.join(_STORE_DIR, ".tudastagadas-gate-override.json")
 _LOG_PATH = os.path.join(_STORE_DIR, "outgoing-copy-gate.log")
 _OVERRIDE_TTL = 90  # masodperc
+_OVERRIDE_DUP_WINDOW = 20  # masodperc: ugyanannak a reply-hivasnak a duplikalt hook-futasai
 
 # A validalt lista (Bob merese, 2026-09-02): szuk, tudas-TAGADAS mintak.
 # Szandekosan NEM tartalmaz kerdojelet vagy altalanos "nincs" szot onmagaban --
@@ -218,6 +219,25 @@ def write_override(reason: str) -> None:
 
 
 def consume_override():
+    """Az override "egyszer hasznalhato", de a HOOK TOBB PELDANYBAN IS FUTHAT
+    UGYANARRA AZ EGY reply-hivasra, es akkor a regi, azonnal torlo valtozat
+    sosem tudott atengedni semmit.
+
+    MERVE 2026-10-13 10:34: ez a kapu KETSZER van bekotve ugyanarra a
+    PreToolUse eventre -- egyszer a projekt .claude/settings.json-jaban,
+    egyszer a globalis ~/.claude/settings.json-ban. A store/outgoing-copy-gate.log
+    ezt szo szerint megmutatta: "OVERRIDE hasznalva" ES kozvetlenul utana
+    "BLOKKOLVA" ugyanarra az uzenetre. Az elso peldany elfogyasztotta az
+    override-ot es atengedte, a masodik mar nem talalt fajlt, es blokkolt.
+    Mivel a hookok ES-kapcsolatban vannak, a blokk nyert, es az override
+    GARANTALTAN hatastalan volt.
+
+    A JAVITAS: az elso hasznalat nem torli a fajlt, csak megjeloli
+    (consumed_at). Ugyanaz az override a kovetkezo _OVERRIDE_DUP_WINDOW
+    masodpercben meg ervenyes -- ez a duplikalt hook-futas ablaka, nem egy
+    masodik uzenet engedelye. Azon tul a fajl torlodik, tehat az
+    "egyszer hasznalhato" szemantika AZ UZENETRE nezve megmarad.
+    """
     if not os.path.exists(_OVERRIDE_PATH):
         return None
     try:
@@ -225,12 +245,35 @@ def consume_override():
             data = json.load(fh)
     except (OSError, ValueError):
         return None
-    fresh = (time.time() - float(data.get("written_at", 0))) <= _OVERRIDE_TTL
-    try:
-        os.remove(_OVERRIDE_PATH)
-    except OSError:
-        pass
-    return (data.get("reason") or "(indoklas nelkul)") if fresh else None
+
+    now = time.time()
+    fresh = (now - float(data.get("written_at", 0))) <= _OVERRIDE_TTL
+    consumed_at = data.get("consumed_at")
+
+    def _torol():
+        try:
+            os.remove(_OVERRIDE_PATH)
+        except OSError:
+            pass
+
+    if not fresh:
+        _torol()
+        return None
+
+    if consumed_at is None:
+        data["consumed_at"] = now
+        try:
+            tmp = _OVERRIDE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, _OVERRIDE_PATH)
+        except OSError:
+            pass
+    elif (now - float(consumed_at)) > _OVERRIDE_DUP_WINDOW:
+        _torol()
+        return None
+
+    return data.get("reason") or "(indoklas nelkul)"
 
 
 # --- a tenyleges ellenorzes ---------------------------------------------------
