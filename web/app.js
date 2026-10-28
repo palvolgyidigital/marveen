@@ -1084,14 +1084,33 @@ function setupAssigneeFilter() {
   }
 
   // (Re)populate options from the current assignee list, preserving selection.
+  //
+  // MERT HIANY, 2026-10-09: a `/api/kanban/assignees` CSAK az ugynok-roster
+  // (plusz a tulajdonos), tehat az EMBERI kollegak nincsenek benne, akiknek
+  // kartyajuk van. Aznap merve a nyitott kartyakon: david 15, abel 7, marci 4,
+  // vagyis David nem tudta leszurni a sajat tetelet, mert a sajat neve nem is
+  // szerepelt a legorduloben. Pont ez volt a panasza ("szeretnenk a
+  // feladatainkat normalisan szurve rendezve latni").
+  //
+  // Ezert a lista a roster ES a kartyakon TENYLEGESEN elofordulo felelosok
+  // UNIOJA. Igy barki megjelenik, akire kartya van bizva, kiszolgalo-oldali
+  // valtoztatas nelkul. A roster-tetel nyer, ha ugyanaz a nev (az hozza a
+  // displayName-et es a tipust).
   const prev = kanbanAssigneeFilter
-  sel.innerHTML = '<option value="">Mind</option>'
-  for (const a of kanbanAssignees) {
+  // A "Mind" feliratot a nyelvi fajlbol vesszuk, nem beegetve: az angol
+  // feluleten "All" all, es a beegetett magyar szo ott is magyarul latszott.
+  sel.innerHTML = ''
+  const allOpt = document.createElement('option')
+  allOpt.value = ''
+  allOpt.textContent = t('kanban.filter.assignee_all')
+  sel.appendChild(allOpt)
+  for (const a of kanbanAssigneeOptions()) {
     const opt = document.createElement('option')
     opt.value = a.name
     // Show the persona displayName (id as fallback), matching #216; the
     // option value / filter key stays the agent id.
-    opt.textContent = a.displayName || a.name
+    const n = kanbanCards.filter((c) => String(c.assignee || '').trim().toLowerCase() === a.name.toLowerCase() && c.status !== 'done').length
+    opt.textContent = (a.displayName || a.name) + (n ? ` (${n})` : '')
     if (a.name === prev) opt.selected = true
     sel.appendChild(opt)
   }
@@ -1137,7 +1156,49 @@ function kanbanCardSorter() {
   if (kanbanSortBy === 'created_asc') return byTime('created_at', 1)
   if (kanbanSortBy === 'created_desc') return byTime('created_at', -1)
   if (kanbanSortBy === 'updated_desc') return byTime('updated_at', -1)
+  // A harom alabbi rendezes a sajat, 2026-10-09-i valtozatunkbol jon vissza. Az
+  // upstream-osszefuzes az egesz sajat rendezot eldobta az upstream javara, es
+  // ezzel ez a harom nezet is elment, pedig David pont a prioritas es a
+  // hatarido szerinti sorrendet kerte. Ugyanabban a rendezoben allnak, nem egy
+  // masodik, parhuzamos rendezoben: egy tablan egy rendezes van.
+  if (kanbanSortBy === 'priority') {
+    return (a, b) => {
+      const r = KANBAN_PRIORITY_ORDER.indexOf(a.priority || 'normal') - KANBAN_PRIORITY_ORDER.indexOf(b.priority || 'normal')
+      return r !== 0 ? r : a.sort_order - b.sort_order
+    }
+  }
+  // "Mi all itt a legregebben": a legregebben nem mozdult elol.
+  if (kanbanSortBy === 'stale') return byTime('updated_at', 1)
+  // Legkorabbi hatarido elol. Hatarido nelkuli kartya a VEGERE megy, nem az
+  // elejere, amit egy ures ertek egyebkent adna.
+  if (kanbanSortBy === 'due') {
+    return (a, b) => {
+      const av = kanbanDueMs(a.due_date)
+      const bv = kanbanDueMs(b.due_date)
+      const an = Number.isNaN(av), bn = Number.isNaN(bv)
+      if (an && bn) return a.sort_order - b.sort_order
+      if (an) return 1
+      if (bn) return -1
+      return av - bv
+    }
+  }
   return (a, b) => a.sort_order - b.sort_order
+}
+
+// A hataridő KETFELE alakban erkezhet, es ezt 2026-10-09-en mertem ki, mert a
+// kartyakon "Invalid Date" allt: az adatbazisban a `due_date` TEXT, `2026-10-01`
+// alakban (`typeof(due_date)='text'` minden kitoltott soron), a felulet viszont
+// tobb helyen `due_date * 1000`-rel szamolt, vagyis unix-masodpercet
+// feltetelezett. Egy szovegbol szorzassal NaN lesz, abbol `new Date(NaN)` ->
+// "Invalid Date", hibauzenet nelkul.
+// Ez a fuggveny MIND A KETTOT elfogadja, es NaN-t ad, ha egyik sem ertelmes.
+function kanbanDueMs(v) {
+  if (v === null || v === undefined || v === '') return NaN
+  if (typeof v === 'number') return v * 1000
+  const str = String(v).trim()
+  if (/^\d+$/.test(str)) return Number(str) * 1000
+  const parsed = Date.parse(str)
+  return Number.isNaN(parsed) ? NaN : parsed
 }
 
 // Project + assignee + label filters, independent of the priority quick-filter
@@ -1879,8 +1940,9 @@ function createCardEl(card, embeddedChildren = []) {
       : ''
 
   let dueHtml = ''
-  if (card.due_date) {
-    const d = new Date(card.due_date * 1000)
+  const dueMs = kanbanDueMs(card.due_date)
+  if (!Number.isNaN(dueMs)) {
+    const d = new Date(dueMs)
     const now = new Date()
     const overdue = d < now && card.status !== 'done'
     const label = d.toLocaleDateString('hu-HU', { month: 'short', day: 'numeric' })
@@ -2323,14 +2385,84 @@ function openNewCardModal(status) {
   setTimeout(() => document.getElementById('cardTitle').focus(), 200)
 }
 
+// Egy URES szerkeszto-szekciot (Cimkek, Blokkolja) osszecsuk egy diszkret
+// "+ ..." linkbe, es csak kattintasra nyitja ki.
+//
+// DAVID KERESE, 2026-10-09: megnyitott egy sajat feladatot, es a Blokkolja
+// szekciora ezt irta: "ez mi?", majd "minek kell nekem azt latni?", utana
+// "vagy a cimkek", vegul "strukturald at". A megnyitott kartya nala ket
+// dologrol szol: megjegyzest irni es lezarni. Egy ures Cimkek- es egy ures
+// Blokkolja-szekcio szerkesztoje egyutt kb. a fel kepernyot elvitte a leiras
+// es a megjegyzesek elol, mindket esetben csak azert, hogy a "nincs semmi"
+// allapotot mutassa.
+//
+// A funkciot NEM vettem el: egy kattintas eloveszi. A szekcio latszik akkor is,
+// ha VAN benne tartalom -- az osszecsukas kizarolag az ures allapotra szol.
+function collapseEmptyDetailSection(sectionId, isEmpty, linkText) {
+  const sec = document.getElementById(sectionId)
+  if (!sec) return
+  const body = [...sec.children].filter((el) => !el.classList.contains('detail-section-toggle'))
+  let toggle = sec.querySelector('.detail-section-toggle')
+  if (!toggle) {
+    toggle = document.createElement('button')
+    toggle.type = 'button'
+    toggle.className = 'detail-section-toggle'
+    toggle.style.cssText = 'background:none;border:none;padding:2px 0;margin:0;color:var(--text-muted);font-size:12px;cursor:pointer;text-align:left;'
+    toggle.addEventListener('click', () => {
+      for (const el of [...sec.children]) {
+        if (!el.classList.contains('detail-section-toggle')) el.style.display = ''
+      }
+      toggle.style.display = 'none'
+    })
+    sec.insertBefore(toggle, sec.firstChild)
+  }
+  toggle.textContent = linkText
+  // A `cardBlockingWrap` sajat logikaja szerint rejtozik ("erre a kartyara
+  // varnak"); ha kinyitunk, azt NE kenyszeritsuk lathatova.
+  const sajatLogika = new Set(['cardBlockingWrap', 'cardLabelNewForm', 'cardAddSubtaskSection'])
+  for (const el of body) {
+    el.style.display = isEmpty ? 'none' : (sajatLogika.has(el.id) ? el.style.display : '')
+  }
+  toggle.style.display = isEmpty ? '' : 'none'
+}
+
+// Egy komment akkor AUDIT-BEJEGYZES, ha van benne onalloan allo `CSEND-datum`
+// sor. Ez a kanban-audit sajat, geppel olvasott jeloloje; aki nem az auditot
+// futtatja, annak semmit nem mond. A minta szandekosan ugyanaz, amit a
+// szures hasznal: a jelolo a SAJAT soraban all egyedul.
+const KANBAN_AUDIT_MARKER = /^\s*CSEND-\d{4}-\d{2}-\d{2}\s*[.)\]]?\s*$/m
+
+// Az ugynok-roster ES a kartyakon tenylegesen elofordulo felelosok unioja.
+// Ugyanaz a hiany, mint a tabla felelos-szurojenel (2026-10-09): a
+// /api/kanban/assignees CSAK az ugynokoket adja vissza, tehat az emberi
+// kollegak (david, abel, marci) egyik legorduloben sem jelentek meg, pedig
+// 26 nyitott kartya van rajuk bizva. A roster-tetel nyer, ha a nev egyezik.
+function kanbanAssigneeOptions() {
+  const seen = new Set(kanbanAssignees.map((a) => a.name.toLowerCase()))
+  const extra = []
+  for (const c of kanbanCards) {
+    const raw = String(c.assignee || '').trim()
+    if (!raw) continue
+    const key = raw.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    extra.push({ name: raw, displayName: raw.charAt(0).toUpperCase() + raw.slice(1) })
+  }
+  extra.sort((a, b) => a.displayName.localeCompare(b.displayName, 'hu'))
+  return [...kanbanAssignees, ...extra]
+}
+
 function populateAssigneeSelect(selectId, selected) {
   const sel = document.getElementById(selectId)
   sel.innerHTML = '<option value="">-- Nincs --</option>'
-  for (const a of kanbanAssignees) {
+  // A kivalasztott ertek nev szerint illeszkedjen, kis/nagybetutol fuggetlenul:
+  // a kartyak `assignee` mezoje szabad szoveg, tehat 'David' es 'david' is elofordul.
+  const want = selected ? String(selected).trim().toLowerCase() : ''
+  for (const a of kanbanAssigneeOptions()) {
     const opt = document.createElement('option')
     opt.value = a.name
     opt.textContent = a.displayName || a.name
-    if (selected && a.name === selected) opt.selected = true
+    if (want && a.name.toLowerCase() === want) opt.selected = true
     sel.appendChild(opt)
   }
 }
@@ -2411,6 +2543,8 @@ async function renderCardLabelsSection(card) {
   try {
     attached = await (await fetch(`/api/kanban/${encodeURIComponent(card.id)}/labels`)).json()
   } catch { /* leave empty -- pill list just stays blank */ }
+
+  collapseEmptyDetailSection('cardLabelsSection', attached.length === 0, t('kanban.detail.add_label_link'))
 
   listEl.innerHTML = ''
   for (const label of attached) {
@@ -2635,6 +2769,12 @@ async function renderCardBlockersSection(card) {
     opt.textContent = (other.seq != null ? `#${other.seq} ` : '') + other.title.slice(0, 70)
     addSelect.appendChild(opt)
   }
+  collapseEmptyDetailSection(
+    'cardBlockersSection',
+    blockers.length === 0 && blocking.length === 0,
+    t('kanban.detail.add_blocker_link'),
+  )
+
   addSelect.onchange = async () => {
     const blockerId = addSelect.value
     if (!blockerId) return
@@ -2720,7 +2860,7 @@ async function showCardDetail(card) {
     </div>
     <div class="meta-item">
       <span class="meta-label">${t('kanban.meta.deadline')}</span>
-      <span class="meta-value">${card.due_date ? new Date(card.due_date * 1000).toLocaleDateString(_lang === 'en' ? 'en-US' : 'hu-HU') : t('kanban.meta.none')}</span>
+      <span class="meta-value">${Number.isNaN(kanbanDueMs(card.due_date)) ? t('kanban.meta.none') : new Date(kanbanDueMs(card.due_date)).toLocaleDateString(_lang === 'en' ? 'en-US' : 'hu-HU')}</span>
     </div>
     <div class="meta-item">
       <span class="meta-label">${t('kanban.meta.active')}</span>
@@ -2910,7 +3050,17 @@ async function showCardDetail(card) {
     const comments = await res.json()
     const list = document.getElementById('commentsList')
     list.innerHTML = ''
-    for (const c of comments) {
+    // AUDIT-BEJEGYZESEK ALAPBOL REJTVE (David, 2026-10-09: "ezeket en nem
+    // akarom latni, alap esetben legyen eltuntetve"). Ezek a kanban-audit
+    // sajat, geppel olvasott bejegyzesei `CSEND-EEEE-HH-NN` jelolovel; egy
+    // kollega szamara nulla informacio, viszont elnyomjak a valodi
+    // megjegyzeseket. NEM toroljuk oket: egyetlen halvany sor a lista vegen
+    // megmondja, hany van, es egy kattintassal eloveheto mind.
+    const emberi = []
+    const auditok = []
+    for (const c of comments) (KANBAN_AUDIT_MARKER.test(c.content || '') ? auditok : emberi).push(c)
+
+    const kommentElem = (c) => {
       const date = new Date(c.created_at * 1000).toLocaleString('hu-HU')
       const div = document.createElement('div')
       div.className = 'comment-item'
@@ -2918,7 +3068,33 @@ async function showCardDetail(card) {
         <div><span class="comment-author">${escapeHtml(c.author)}</span><span class="comment-date">${date}</span></div>
         <div class="comment-body">${escapeHtml(c.content)}</div>
       `
-      list.appendChild(div)
+      return div
+    }
+
+    for (const c of emberi) list.appendChild(kommentElem(c))
+
+    if (auditok.length > 0) {
+      const sor = document.createElement('button')
+      sor.type = 'button'
+      sor.className = 'comment-audit-toggle'
+      sor.style.cssText = 'background:none;border:none;padding:4px 0;margin:0;color:var(--text-muted);font-size:12px;cursor:pointer;text-align:left;display:block;'
+      sor.textContent = t('kanban.comment.audit_hidden', { n: auditok.length })
+      const doboz = document.createElement('div')
+      doboz.style.display = 'none'
+      for (const c of auditok) {
+        const d = kommentElem(c)
+        d.classList.add('comment-audit')
+        doboz.appendChild(d)
+      }
+      sor.addEventListener('click', () => {
+        const rejtve = doboz.style.display === 'none'
+        doboz.style.display = rejtve ? '' : 'none'
+        sor.textContent = rejtve
+          ? t('kanban.comment.audit_shown', { n: auditok.length })
+          : t('kanban.comment.audit_hidden', { n: auditok.length })
+      })
+      list.appendChild(sor)
+      list.appendChild(doboz)
     }
   } catch { /* ignore */ }
 
@@ -2929,7 +3105,15 @@ async function showCardDetail(card) {
   // comment submit silently no-opped (addCommentBtn returns when !author).
   // (Resolution of the #254/#241 overlap: keep #241's type-resolved default
   // over #254's hard-coded "Gábor" -- same deployment-agnostic reasoning.)
+  //
+  // HELYESBITES 2026-10-09, David jelzesere ("megnyitok egy feladatomat es a
+  // szerzore lent zoli"): az alapertelmezes a TULAJDONOS volt, tipus szerint
+  // feloldva, tehat MINDEN kartyan a tulajdonos allt a komment szerzojekent. Aki
+  // a sajat feladatat nyitotta meg, annak a kommentje az o neven ment volna el.
+  // Az ertelmes alapertelmezes a KARTYA SAJAT FELELOSE; a tulajdonos csak akkor
+  // jon, ha a kartyan nincs felelos.
   const defaultCommentAuthor =
+    String(card.assignee || '').trim() ||
     (kanbanAssignees.find((a) => a.type === 'owner') || kanbanAssignees[0] || {}).name || ''
   populateAssigneeSelect('commentAuthor', defaultCommentAuthor)
 
@@ -2969,8 +3153,8 @@ async function showCardDetail(card) {
     document.getElementById('cardTestSteps').value = card.test_steps || ''
     document.getElementById('cardPriority').value = card.priority
     document.getElementById('cardProject').value = card.project || ''
-    document.getElementById('cardDue').value = card.due_date
-      ? new Date(card.due_date * 1000).toISOString().split('T')[0]
+    document.getElementById('cardDue').value = !Number.isNaN(kanbanDueMs(card.due_date))
+      ? new Date(kanbanDueMs(card.due_date)).toISOString().split('T')[0]
       : ''
     document.getElementById('cardStart').value = card.start_date
       ? new Date(card.start_date * 1000).toISOString().split('T')[0]
@@ -2983,6 +3167,71 @@ async function showCardDetail(card) {
     populateAssigneeSelect('cardAssignee', card.assignee)
     populateProjectSuggestions()
     openModal(cardModalOverlay)
+  }
+
+  // Lezaras (status -> done). David kerte, 2026-10-09: "lehessen lezarni".
+  // Eddig a reszlet-nezetbol csak szerkeszteni, archivalni vagy torolni lehetett,
+  // a lezarashoz vissza kellett menni a tablara es athuzni a kartyat a Kesz
+  // oszlopba. A gomb a mar meglevo PUT-ot hasznalja, ugyanazzal a sort_order
+  // es actor mezovel, mint a huzas, tehat az ugynok-dispatch is ugyanugy fut.
+  const closeBtn = document.getElementById('cardCloseBtn')
+  if (closeBtn) {
+    closeBtn.style.display = card.status === 'done' ? 'none' : ''
+    closeBtn.onclick = async () => {
+      try {
+        const res = await fetch(`/api/kanban/${encodeURIComponent(card.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'done', sort_order: 0, actor: kanbanMoveActor() }),
+        })
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.status) }
+        closeModal(cardDetailOverlay)
+        showToast(t('kanban.toast.card_closed'))
+        loadKanban()
+      } catch {
+        showToast(t('kanban.toast.card_close_error'))
+      }
+    }
+  }
+
+  // EMAIL GOMB. David kerte, 2026-10-09: "ha be tudsz azonositani belole
+  // kontaktok akkor tegyel bele email kuldes gombot".
+  //
+  // A gomb CSAK akkor jelenik meg, ha a kartya partnerhez van kotve ES annak a
+  // partnernek van aktiv, email-cimes kapcsolattartoja. Nincs ures allapot:
+  // ami nem kuldheto, az meg sem jelenik.
+  //
+  // ES NEM KULD, HANEM ELOKESZIT: `mailto:`-t nyit a cimzettel, a kartya
+  // cimevel targykent, es egy sorral a torzsben. A kuldes igy a kollegaenal
+  // marad, a sajat levelezojeben. Szandekos: egy dashboard-gombbol inditott
+  // automatikus kuldes megkerulne a jovahagyas- es a copy-kaput, amik minden
+  // mas kimeno levelunket vedik.
+  const emailBtn = document.getElementById('cardEmailBtn')
+  if (emailBtn) {
+    emailBtn.style.display = 'none'
+    emailBtn.onclick = null
+    emailBtn.title = ''
+    emailBtn.removeAttribute('data-mailto')
+    if (card.partner_id) {
+      try {
+        const pr = await (await fetch(`/api/partners/${encodeURIComponent(card.partner_id)}`)).json()
+        const cimzettek = (pr.contacts || []).filter((k) => k.status !== 'inactive' && k.email && k.email.trim())
+        if (cimzettek.length > 0) {
+          const cimek = cimzettek.map((k) => k.email.trim()).join(',')
+          const nevek = cimzettek.map((k) => k.name).join(', ')
+          emailBtn.style.display = ''
+          emailBtn.title = t('kanban.email.tooltip', { names: nevek })
+          const seq = card.seq != null ? `#${card.seq} ` : ''
+          const targy = `${seq}${card.title}`
+          const torzs = t('kanban.email.body', { partner: pr.partner?.name || '', title: card.title })
+          // A kesz mailto a gombon is rajta marad `data-mailto`-ban: igy
+          // visszamerheto teszteles kozben, es a kollega is masolhatja.
+          const mailto = `mailto:${encodeURIComponent(cimek)}?subject=${encodeURIComponent(targy)}&body=${encodeURIComponent(torzs)}`
+          emailBtn.dataset.mailto = mailto
+          emailBtn.onclick = () => { window.location.href = mailto }
+        }
+      } catch { /* partner nem elerheto -> a gomb rejtve marad */ }
+    }
   }
 
   // Archive
@@ -3051,6 +3300,10 @@ async function showCardDetail(card) {
     const statusLabelsShort = { planned: t('kanban.status.planned'), in_progress: t('kanban.status.in_progress'), testing: t('kanban.status.testing'), waiting: t('kanban.status.waiting_short'), done: t('kanban.status.done') }
     if (children.length > 0 || isTask) {
       section.style.display = ''
+      // Ugyanaz, mint a Cimkek es a Blokkolja szekcionak: ha NINCS reszfeladat,
+      // a cim es a felviteli mezo egy "+ Reszfeladat" linkbe csukodik. Egy
+      // uresen allo urlap ugyanugy helyet foglal a megjegyzesek elol.
+      collapseEmptyDetailSection('cardChildrenSection', children.length === 0, t('kanban.detail.add_subtask_link'))
       list.innerHTML = ''
       // #114: Delete button per subtask — only shown when the parent card is not done
       const canDeleteChild = card.status !== 'done'

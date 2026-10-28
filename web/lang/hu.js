@@ -227,7 +227,7 @@ window._i18n.hu = {
   'kanban.email.body':             'Kedves Kolléga!\n\n{partner}, tárgy: {title}\n\n',
   'kanban.detail.add_label_link':  '+ Címke',
   'kanban.detail.add_blocker_link':'+ Blokkoló',
-  'kanban.detail.add_subtask_link': '+ Alfeladat',
+  'kanban.detail.add_subtask_link': '+ Részfeladat',
   'kanban.comment.audit_hidden':   '{n} audit-bejegyzés elrejtve, mutasd',
   'kanban.comment.audit_shown':    '{n} audit-bejegyzés, elrejt',
   'kanban.toast.card_closed':      'Kártya lezárva',
