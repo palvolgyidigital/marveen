@@ -9,6 +9,14 @@
 # (mirrors MAIN_AGENT_ID/MAIN_INBOX_OBSERVER_DB-style overrides already used
 # by main-inbox-observer.sh's suite), never at the real install.
 #
+# AGENT_SILENCE_TASKS_DIR IS PART OF THAT ISOLATION, and leaving it out made two
+# cases fail from 2026-10-xx (e52c7211, "only watch agents that have scheduled
+# work"): without the override the watchdog read the REAL
+# ~/.claude/scheduled-tasks, where the fixture agents suba and subb do not
+# exist, so both were filtered out as having no work and the verdict came back
+# ok with an empty silent list. The suite was measuring the developer's own
+# install, not the fixture. The fixture tree below supplies the enabled tasks.
+#
 # Exit codes: 0 = all agents within threshold, 1 = at least one silent beyond
 # it, 2 = db unreadable or nothing discoverable.
 #
@@ -57,8 +65,18 @@ add_row() {
 AGENTS_DIR="$TMP/agents"
 mkdir -p "$AGENTS_DIR/suba" "$AGENTS_DIR/subb"
 
+# Fixture scheduled-task tree: one ENABLED task per watched agent, because the
+# watchdog only watches an agent that has scheduled work. An agent missing from
+# here is correctly skipped -- that is what the last case below relies on.
+TASKS_DIR="$TMP/scheduled-tasks"
+for _a in main suba subb; do
+  mkdir -p "$TASKS_DIR/fixture-$_a"
+  printf '{"agent":"%s","enabled":true,"schedule":"0 8 * * *"}\n' "$_a" > "$TASKS_DIR/fixture-$_a/task-config.json"
+done
+unset _a
+
 run_check() {  # run_check <db> [extra env assignments already exported by caller]
-  MAIN_AGENT_ID=main AGENT_SILENCE_AGENTS_DIR="$AGENTS_DIR" \
+  MAIN_AGENT_ID=main AGENT_SILENCE_AGENTS_DIR="$AGENTS_DIR" AGENT_SILENCE_TASKS_DIR="$TASKS_DIR" \
     bash "$WATCHDOG" --check "$1" 2>&1
 }
 
@@ -66,7 +84,7 @@ expect() {  # expect <label> <db> <expected_verdict> <expected_rc> [extra env...
   local label="$1" db="$2" want_verdict="$3" want_rc="$4"
   shift 4
   local out rc verdict
-  out=$(env "$@" MAIN_AGENT_ID=main AGENT_SILENCE_AGENTS_DIR="$AGENTS_DIR" bash "$WATCHDOG" --check "$db" 2>&1); rc=$?
+  out=$(env "$@" MAIN_AGENT_ID=main AGENT_SILENCE_AGENTS_DIR="$AGENTS_DIR" AGENT_SILENCE_TASKS_DIR="$TASKS_DIR" bash "$WATCHDOG" --check "$db" 2>&1); rc=$?
   verdict=$(printf '%s' "$out" | sed -n 's/.*verdict=\([a-z]*\).*/\1/p')
   if [ "$verdict" = "$want_verdict" ] && [ "$rc" = "$want_rc" ]; then
     pass "$label"
@@ -115,8 +133,12 @@ add_row "$DB5" memories main 60
 add_row "$DB5" tool_call_log suba 60
 out=$(run_check "$DB5")
 rc=$?
+# A siker-agat IS szamolni kell: `;;`-vel a sikeres eset NEM ir ki semmit es
+# nem novel szamlalot, tehat beture ugyanugy nez ki, mint egy le sem futott
+# eset. 2026-10-28-an pont ez tortent: a javitas utan a suite 8 helyett 7
+# esetet jelentett, es a "hianyzo" eset valojaban atmeno volt.
 case "$out" in
-  *"unknown=[subb]"*) ;;
+  *"unknown=[subb]"*) pass "never-seen agent listed under unknown, not silent" ;;
   *) fail "never-seen agent listed under unknown, not silent" "$out" ;;
 esac
 verdict=$(printf '%s' "$out" | sed -n 's/.*verdict=\([a-z]*\).*/\1/p')
