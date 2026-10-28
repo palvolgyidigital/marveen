@@ -27,6 +27,11 @@ Usage:
   python3 scripts/napi-naptar.py --json
   python3 scripts/napi-naptar.py --creds store/.m365-david-credentials
 """
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from install_zone import local_zone_name  # noqa: E402
 import argparse
 import datetime
 import json
@@ -35,7 +40,8 @@ import urllib.parse
 import urllib.request
 
 CREDS = "/home/pdb/marveen/store/.m365-abel-kondics-credentials"
-TZ = "Europe/Budapest"
+# A telepites zonaja, nem beegetett literal (ISSUE1895): scripts/lib/install_zone.py
+TZ = local_zone_name() or "UTC"
 
 
 def _creds(path):
