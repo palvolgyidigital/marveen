@@ -11,13 +11,17 @@ tudja: a `POST /users/<mailbox>/messages` draft-ot hoz létre, amit a fiók gazd
 Piszkozatok mappában, és ő dönti el, kinek és mikor megy ki. Küldés-képesség itt nincs,
 tehát ezzel a szkripttel nem lehet véletlenül levelet kiengedni.
 
-A TORZS SIMA SZOVEG (contentType: Text). Ha HTML-t kuldunk be, a kliens a tageket
-jeleniti meg -- ez a 2026-10-01-i mert hiba az EDI-korben.
+A TORZS ALAPBOL SIMA SZOVEG (contentType: Text). Ha HTML-t kuldunk be Text-kent, a
+kliens a tageket jeleniti meg -- ez a 2026-10-01-i mert hiba az EDI-korben. Ezert a
+HTML-torzs KULON kapcsolot kap: `--html`, es csak azzal lesz contentType=HTML. Igy a
+ketto nem keverhato ossze veletlenul, es a kimenet is kiirja, melyik ment be.
+A `--html` 2026-10-28-an kerult be: Marci a cross-sell levelhez kert piszkozatot "az
+elozo levelek alapjan", azok pedig HTML-ek (store/crosssell-agent/level_html.py).
 
 Hasznalat:
   python3 scripts/graph-mail-piszkozat.py <creds-fajl> --torzs <fajl> [--targy "..."]
                                           [--cimzett a@b.hu] [--masolat c@d.hu]
-                                          [--melleklet <fajl> ...]
+                                          [--melleklet <fajl> ...] [--html]
 """
 import argparse
 import base64
@@ -74,6 +78,8 @@ def main() -> int:
     # toRecipients-et; a draft igy a kliensben is cc-vel nyilik meg.
     ap.add_argument('--masolat', action='append', default=[], help='cc cimzett(ek)')
     ap.add_argument('--melleklet', action='append', default=[])
+    ap.add_argument('--html', action='store_true',
+                    help='a torzs HTML (contentType=HTML). Nelkule sima szoveg.')
     a = ap.parse_args()
 
     c = creds_betolt(a.creds)
@@ -81,9 +87,10 @@ def main() -> int:
     tok = token(c)
     torzs = open(a.torzs, encoding='utf-8').read()
 
+    tipus_torzs = 'HTML' if a.html else 'Text'
     uj = {
         'subject': a.targy,
-        'body': {'contentType': 'Text', 'content': torzs},
+        'body': {'contentType': tipus_torzs, 'content': torzs},
         'toRecipients': [{'emailAddress': {'address': x}} for x in a.cimzett],
     }
     if a.masolat:
@@ -93,7 +100,7 @@ def main() -> int:
     print(f'PISZKOZAT LETREHOZVA: {mailbox}')
     print(f'  id={mid}')
     print(f'  targy={a.targy!r}  cimzett={a.cimzett or "(nincs)"}  masolat={a.masolat or "(nincs)"}')
-    print(f'  torzs {len(torzs)} karakter, contentType=Text')
+    print(f'  torzs {len(torzs)} karakter, contentType={tipus_torzs}')
 
     for ut in a.melleklet:
         nev = os.path.basename(ut)
