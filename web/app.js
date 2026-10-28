@@ -811,11 +811,16 @@ let kanbanGroupByInitialized = false
 let kanbanSearchQuery = ''
 // Card order inside a column: 'manual' (sort_order, i.e. the drag order --
 // the default and the only one where drag & drop makes sense) | 'seq_asc' |
-// 'seq_desc' | 'created_asc' | 'created_desc' | 'updated_desc'. Persisted in
-// localStorage.
+// 'seq_desc' | 'created_asc' | 'created_desc' | 'updated_desc' | 'priority' |
+// 'stale' | 'due'. Persisted in localStorage.
 let kanbanSortBy = 'manual'
 // Every value the sort dropdown offers besides 'manual'.
-const KANBAN_SORTS = ['seq_asc', 'seq_desc', 'created_asc', 'created_desc', 'updated_desc']
+// A sorrend NEM dekoracio: a kanbanSortBy legordulojenek opcioi ezzel a listaval
+// egyeznek (kanban-search-sort source pin), es a localStorage-bol visszaolvasott
+// ertek is CSAK akkor all vissza, ha szerepel itt. A harom utolso a sajat,
+// 2026-10-09-i nezetunk (David kerese), amit az upstream-osszefuzes eldobott.
+const KANBAN_SORTS = ['seq_asc', 'seq_desc', 'created_asc', 'created_desc', 'updated_desc',
+  'priority', 'stale', 'due']
 // Which swimlane keys (assignee name or priority value) are collapsed. Lives
 // for the page session only -- intentionally not persisted across reloads.
 const kanbanCollapsedLanes = new Set()
