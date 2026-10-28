@@ -5,7 +5,7 @@
 //   tsx scripts/graph-mail.ts verify
 //   tsx scripts/graph-mail.ts list [--unread] [--top N] [--folder inbox|sentitems]
 //   tsx scripts/graph-mail.ts headers --id <messageId> [--json]
-//   tsx scripts/graph-mail.ts send --to a@b.hu[,c@d.hu] --subject "..." --body "..." [--cc ...] [--html] [--attach FILE]
+//   tsx scripts/graph-mail.ts send --to a@b.hu[,c@d.hu] --subject "..." --body "..." [--cc ...] [--html] [--attach FILE ...]
 //                                  [--signature hu|en]
 //   tsx scripts/graph-mail.ts send --to a@b.hu --subject "..." --body - < /abs/path/body.html
 //
@@ -89,6 +89,22 @@ function flag(name: string): string | undefined {
     if (args[i].startsWith(`--${name}=`)) return args[i].slice(name.length + 3)
   }
   return undefined
+}
+
+/**
+ * Every occurrence of a repeatable flag, in order. `--attach` used to be
+ * single-valued because `flag()` returns the FIRST match, so a second
+ * `--attach` was silently dropped -- the letter went out with one file and
+ * nothing said the rest were missing. Marci asked for per-file attachments
+ * (2026-10-20), and a zip is not the same artefact for the reader.
+ */
+function flags(name: string): string[] {
+  const out: string[] = []
+  const argv = process.argv
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === `--${name}` && argv[i + 1] !== undefined) out.push(argv[i + 1])
+  }
+  return out
 }
 function has(name: string): boolean {
   return process.argv.includes(`--${name}`)
@@ -223,8 +239,8 @@ async function main(): Promise<void> {
       break
     }
     case 'send': {
-      const attachPath = flag('attach')
-      const attachments = attachPath ? [readAttachment(attachPath)] : undefined
+      const attachPaths = flags('attach')
+      const attachments = attachPaths.length ? attachPaths.map(readAttachment) : undefined
       const to = flag('to')
       const subject = flag('subject')
       // `--body -` reads the body from stdin. That is the ONLY way to send an HTML

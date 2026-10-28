@@ -28,8 +28,12 @@ source cannot be read, the script says so and the verdict becomes BIZONYTALAN. I
 reports "all clear" from a file it failed to open -- an unreadable log looks exactly
 like a quiet one.
 
-TIMEZONE: naplo.log stamps are UTC with a Z suffix. Budapest is UTC+2 in summer. The
-report prints LOCAL time, because the reader's morning is local.
+TIMEZONE: naplo.log stamps are UTC with a Z suffix. The report prints LOCAL Budapest
+time, because the reader's morning is local. Use the named zone, never a fixed
+offset: a hard-coded UTC+2 was correct only in summer, and on 2026-10-26 (the first
+weekday after DST ended) it printed every clock time one hour ahead -- the header
+said 08:21 at 07:21 CET. The substantive counts are offset-independent, but the
+timestamps a human reads are not.
 
 Usage:
   python3 scripts/edi-reggeli-ellenorzes.py          # prints the report text
@@ -41,13 +45,14 @@ import json
 import os
 import re
 import sys
+from zoneinfo import ZoneInfo
 
 NAPLO = "/home/pdb/marveen/store/ecod-agent/naplo.log"
 HIBA = "/home/pdb/marveen/store/ecod-agent/cron-error.log"
 SAM_STATE = "/home/pdb/marveen/agents/sam/data/edi-mail-check/state.json"
 ORAK = 24
 
-TZ = dt.timezone(dt.timedelta(hours=2))
+TZ = ZoneInfo("Europe/Budapest")
 INDIT = "ECOD Agent inditasa"
 FIGY = re.compile(r"^(\S+) - FIGYELEM: a statuszvaltas NEM ment at ezekre: ([0-9 ,]+)")
 STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
@@ -57,6 +62,9 @@ def most() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def ma_kezdet() -> dt.datetime:
+    """A mai nap 00:00 LOKALIS idoben. Sam napi 06:00-s koret ehhez mérjük."""
+    return most().astimezone(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
 def olvas(path: str):
     """(sorok, hibauzenet). A hibauzenet NEM ures = harmadik allapot, nem nulla talalat."""
     try:
@@ -148,6 +156,7 @@ def main() -> int:
                    + ", ".join(f"{k} ({v} futas)" for k, v in sorted(tartos.items())))
 
     fuggo = varakozo = None
+    sam_allapot_ideje = None
     varakozo_reszletek: list[str] = []
     try:
         with open(SAM_STATE, encoding="utf-8") as fh:
@@ -176,10 +185,22 @@ def main() -> int:
                 reszek.append("jelezve " + jelzes)
             varakozo_reszletek.append(", ".join(reszek))
         kor = dt.datetime.fromtimestamp(os.path.getmtime(SAM_STATE), dt.timezone.utc)
-        if kor < most() - dt.timedelta(hours=30):
-            baj.append("A Relex-osszevetes allapota 30 oranal regebbi ("
-                       + kor.astimezone(TZ).strftime("%m-%d %H:%M")
-                       + "), tehat a napi 06:00-s ellenorzes valoszinuleg nem futott.")
+        sam_allapot_ideje = kor.astimezone(TZ)
+        # SAM MERESE, 2026-10-14 09:2x (inter-agent msg 6352): a 30 oras kuszob TUL BO.
+        # Ma a gazdagep-kieses miatt Sam 06:00-s kore 'missed' lett, az allapotfajl a
+        # TEGNAPI 06:00-s meresnel maradt, es a 08:22-es riport abbol kuldott szamokat
+        # Davidnak. A fajl akkor 26,4 oras volt, tehat a 30 oras kuszob NEM tuzelt, es
+        # semmi nem jelezte, hogy a Relex-szamok egy napos adatbol vannak. Valos kar
+        # ezuttal nem lett (a ket mai rendeles rendben volt), de a mechanizmus valodi.
+        # EZERT A FELTETEL MOSTANTOL NEM IDOTARTAM, HANEM AZ, HOGY A MAI FUTASBOL VAN-E:
+        # Sam ellenorzoje naponta 06:00-kor fut (cron '0 6 * * *', hetvegen is), tehat
+        # 07:00 utan a mai allapot MEGLETE a helyes elvaras, nem egy 30 oras ablak.
+        mai_hatar = ma_kezdet().replace(hour=6)
+        if most().astimezone(TZ) >= ma_kezdet().replace(hour=7) and sam_allapot_ideje < mai_hatar:
+            baj.append("A Relex-osszevetes allapota NEM a mai futasbol van ("
+                       + sam_allapot_ideje.strftime("%m-%d %H:%M")
+                       + "), tehat a napi 06:00-s ellenorzes a riport elott nem futott le. "
+                       + "A lenti Relex-szamok ennek a korabbi napnak az allapotat tukrozik.")
     except Exception as exc:  # noqa: BLE001
         bizonytalan.append(f"Sam allapotfajlja nem olvashato: {exc!r}")
 
@@ -212,7 +233,9 @@ def main() -> int:
         sorokki.append("  - nem mérhető: " + b)
     sorokki += ["",
                 f"Lefutott betöltés: {len(latott)} óra a várt {ORAK}-ból.",
-                f"Relex-oldali függő rendelés: {fuggo if fuggo is not None else 'nem mérhető'}.",
+                f"Relex-oldali függő rendelés: {fuggo if fuggo is not None else 'nem mérhető'}"
+                + (f" (a Relex-összevetés állapota: {sam_allapot_ideje.strftime('%m-%d %H:%M')})"
+                   if sam_allapot_ideje else "") + ".",
                 f"Korábban jelzett hiányzó EDI-átvitel: {varakozo if varakozo is not None else 'nem mérhető'}."]
     if varakozo_reszletek:
         sorokki += ["",
