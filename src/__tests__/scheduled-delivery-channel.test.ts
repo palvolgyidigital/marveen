@@ -146,7 +146,7 @@ describe('resolveTaskChannelTarget with the install default and the task-level p
     const got = resolveTaskChannelTarget({ agent: MAIN_AGENT_ID, channelProvider: 'telegram' }, SLACK_DM)
     expect(got.provider).toBe('telegram')
     expect(got.chatId).not.toBe(SLACK_DM.chatId)
-    expect(got).toEqual(resolveBoundChannel(MAIN_AGENT_ID, 'telegram'))
+    expect(got).toEqual(resolveBoundChannel(MAIN_AGENT_ID, undefined, 'telegram'))
   })
 
   it('"none" wins over everything', () => {

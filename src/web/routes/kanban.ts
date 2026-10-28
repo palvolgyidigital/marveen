@@ -650,6 +650,7 @@ export function parseClaimTtl(raw: unknown): number | null {
   if (typeof n !== 'number' || !Number.isInteger(n)) return null
   if (n < KANBAN_CLAIM_MIN_TTL_SEC || n > KANBAN_CLAIM_MAX_TTL_SEC) return null
   return n
+}
 
 // --- Feladat-csatolmanyok (CRM) -----------------------------------------
 // David kerese, 2026-10-22 14:10 (Telegram 10558): "Fajlt lehessen feltolteni a

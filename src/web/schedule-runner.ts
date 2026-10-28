@@ -1173,7 +1173,8 @@ export function resolveTaskChannelTarget(
   if (task.channelProvider) {
     if (task.telegramChatId) return { provider: task.channelProvider, chatId: task.telegramChatId }
     if (isMain && deliveryDefault && deliveryDefault.provider === task.channelProvider) return { ...deliveryDefault }
-    return resolveBoundChannel(agentName, task.channelProvider)
+    // A masodik parameter a task (WRONGRECIP819 precedencia), a harmadik a provider.
+    return resolveBoundChannel(agentName, task, task.channelProvider)
   }
   if (task.telegramChatId) return { provider: resolveAgentProvider(agentName), chatId: task.telegramChatId }
   if (isMain && deliveryDefault) return { ...deliveryDefault }
