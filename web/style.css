@@ -8454,6 +8454,107 @@ body {
   border-radius: var(--radius-sm); padding: 10px 13px; margin-bottom: 8px;
 }
 .pn-item.is-done { opacity: 0.55; }
+
+/* A feladat cime szerkesztheto, de alaphelyzetben SZOVEGNEK kell kinezni: egy
+   keretes beviteli mezo oda egy listaban zajos, es azt sugallna, hogy a mentes
+   kulon lepes. Keret es hatter csak fokuszban jelenik meg -- akkor viszont
+   lathatoan, mert ott mar szerkesztes zajlik. (David kerese, 2026-10-14) */
+.pn-task-title {
+  width: 100%; font-size: 13px; line-height: 1.4; font-family: inherit;
+  color: var(--text); background: transparent;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  padding: 2px 5px; margin: -2px -5px;
+}
+.pn-task-title:hover { border-color: var(--border); }
+.pn-task-title:focus {
+  outline: none; border-color: var(--accent);
+  background: var(--bg-card);
+}
+.pn-item.is-done .pn-task-title { text-decoration: line-through; }
+
+/* Szerkesztheto mezo a kapcsolattarto soraban. Ugyanaz az elv, mint a feladat
+   cimenel: alaphelyzetben szovegnek latszik, keret csak hoverre es fokuszra.
+   A nev nagyobb es kiemelt, mert az a sor azonositoja. */
+.pn-inline {
+  font-size: 12px; font-family: inherit; color: var(--text-muted);
+  background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius-sm); padding: 2px 5px;
+}
+.pn-inline-nev { font-size: 13px; font-weight: 600; color: var(--text); width: 220px; max-width: 100%; }
+.pn-inline:hover { border-color: var(--border); }
+.pn-inline:focus {
+  outline: none; border-color: var(--accent);
+  background: var(--bg-card); color: var(--text);
+}
+.pn-inline::placeholder { color: var(--text-dim); font-style: italic; }
+
+/* Lepes-sor: behuzva, es egy bal oldali vonal koti a szulo feladathoz. Igy a
+   lapon ranezesre latszik, mi tartozik mihez, legordulok olvasasa nelkul. */
+.pn-lepes-sor {
+  margin-left: 26px; border-left: 2px solid var(--accent-soft, var(--border));
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+}
+.pn-lepes { margin-left: 26px; }
+
+/* Torles-gomb a soron. Halvany es szinezetlen alaphelyzetben: a torles nem az a
+   muvelet, amire a szem elsonek essen. Hoverre lesz piros, hogy a kattintas
+   pillanataban ne legyen ketseges, mi tortenik. (David kerese, 2026-10-14) */
+.pn-torles {
+  margin-left: auto; border: 1px solid transparent; background: transparent;
+  color: var(--text-dim); font-size: 15px; line-height: 1;
+  padding: 2px 7px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.pn-torles:hover { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+
+/* Feladat-csatolmanyok (David kerese, 2026-10-22). A sor TORDELHETO, mert egy
+   feladathoz tobb fajl is kerulhet, es a partner-lap keskeny is lehet. */
+.pn-csatolmanyok {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.pn-csatolmany {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 6px;
+  background: var(--surface-2, #fafafa);
+  font-size: 11.5px;
+  max-width: 100%;
+}
+.pn-csatolmany > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.pn-csatolmany > a > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.pn-csatolmany > a:hover > span { text-decoration: underline; }
+/* A kis elonezet fix magassagu, hogy egy nagy kep ne nyomja szet a sort. */
+/* A belyegkep src nelkul indul (tokennel toltjuk), ezert kell egy latszo helytarto,
+   kulonben a szoveg ugral, amikor megerkezik a kep. */
+.pn-csatolmany img:not([src]) {
+  background: var(--border, #e3e3e3);
+}
+.pn-csatolmany img {
+  height: 26px;
+  width: 26px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: none;
+  display: block;
+}
+.pn-csatolmany-meret { color: var(--text-muted, #888); flex: none; }
 .pn-empty { font-size: 12.5px; color: var(--text-muted); padding: 4px 2px 10px; }
 .pn-time {
   border-left: 2px solid var(--border); margin-left: 6px;
@@ -8481,3 +8582,73 @@ body {
 }
 .pn-count-line.is-soon { color: var(--text); }
 .pn-count-line.is-none { font-weight: 500; color: var(--text-muted); }
+
+/* Partner-kartya nyitott feladat-lista (David 2026-10-15, Telegram 9786/9788 2-3-4. pont).
+   A --text es a --accent valtozot hasznaljuk: a --text-primary NEM letezik ebben a
+   temaban, es egy nem letezo valtozo csendben oroklodo szint ad. */
+.pn-tetel-lista {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pn-tetel {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0.85;
+  line-height: 1.35;
+}
+.pn-tetel-cim {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pn-tetel-datum {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.75;
+}
+.pn-tetel-datum.is-late { color: #d9534f; opacity: 1; font-weight: 600; }
+.pn-tetel-datum.is-soon { color: #d9a441; opacity: 1; font-weight: 600; }
+.pn-tetel-felelos {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+.pn-tetel-tobbi { opacity: 0.6; font-size: 11px; }
+
+
+/* Valasz a CRM-feladatokon: "mi lett a megoldas", EGY felulirhato mezo.
+   David kerese es dontese, 2026-10-15 (Telegram 9832, 9836).
+   A valtozok, amik ebben a temaban LETEZNEK: --text, --text-muted, --accent,
+   --border, --surface. A --text-primary NEM letezik, azt 10-15-en mar egyszer
+   elneztem a nyitott-feladat listanal. */
+.pn-valasz {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  border-radius: 0 4px 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.pn-valasz-fej {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.pn-valasz-szoveg { color: var(--text); white-space: normal; }
+.pn-item.is-done .pn-valasz { opacity: 0.75; }
+.pn-valasz-szerk { margin-top: 8px; }
+.pn-lepes-sor .pn-valasz { font-size: 12px; }

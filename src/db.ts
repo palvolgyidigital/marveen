@@ -742,6 +742,26 @@ export function initDatabase(dbPathOverride?: string): void {
     // column already exists
   }
 
+  // --- Kanban card attachments (CRM) ---
+  // David kerese, 2026-10-22 14:10 (Telegram 10558), szo szerint: "Fajlt lehessen
+  // feltolteni a feladatoz, dokumentum, kis kep". A minta a mar mukodo
+  // idea_attachments: ugyanaz a tarolasi es letoltesi ut, csak a kartyara kotve.
+  // A fajl a lemezen all (store/kanban-csatolmanyok/<kartya>/), a sorban csak az
+  // utvonal -- igy egy nagy melleklet nem fujja fel az adatbazist.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kanban_attachments (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      stored_path TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      uploaded_by TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_kanban_attachments_card ON kanban_attachments(card_id)`)
+
   // Homoglyph journal (GATEHOMOGLIFSWEEP816): agents write kanban via sqlite3
   // directly, so an API-level check never sees those writes. These triggers
   // journal (never block, never modify) inserts whose text carries a measured
@@ -1439,7 +1459,7 @@ export function initDatabase(dbPathOverride?: string): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'partner'
-        CHECK(type IN ('beszallito','vevo','szolgaltato','erdeklodo','partner')),
+        CHECK(type IN ('beszallito','vevo','szolgaltato','erdeklodo','partner','feladatok')),
       owner TEXT,
       country TEXT,
       note TEXT,
@@ -1451,6 +1471,53 @@ export function initDatabase(dbPathOverride?: string): void {
       updated_at INTEGER NOT NULL
     )
   `)
+  // Migration: a 'feladatok' partner-tipus. A CHECK-listat SQLite-ban nem lehet
+  // ALTER-rel bovíteni, ezert a tablat ujra kell epiteni -- ugyanaz a recept, mint
+  // a kanban_cards 'testing' statuszanal feljebb.
+  //
+  // David dontese, 2026-10-20 13:41 (Telegram 10196), a kerdesemre, hogy a megleve
+  // harom tipus kozul melyik legyen az ove: "Uj tipus: Feladatok". A tabla szerkezete
+  // az o dontese (2026-10-14: "csak en szerkeszhessem a CRM tabla alapjat"), ezert
+  // all itt az o szava, nem egy sajat otlet.
+  //
+  // MIERT BIZTONSAGOS A DROP: harom tabla hivatkozik a partners(id)-ra
+  // (kanban_cards.partner_id, partner_contacts es partner_interactions ON DELETE CASCADE),
+  // de a `foreign_keys` pragma ezen a telepitesen nincs bekapcsolva (merve 2026-10-20),
+  // tehat a DROP nem kaszkadol. A pragmat a migracio idejere akkor is kikapcsoljuk,
+  // hogy a viselkedes ne fuggjon egy kesobbi pragma-valtoztatastol.
+  try {
+    const sor = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='partners'").get() as { sql?: string } | undefined
+    if (sor?.sql && !sor.sql.includes("'feladatok'")) {
+      const fk = db.pragma('foreign_keys', { simple: true })
+      db.pragma('foreign_keys = OFF')
+      db.exec(`
+        CREATE TABLE partners_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'partner'
+            CHECK(type IN ('beszallito','vevo','szolgaltato','erdeklodo','partner','feladatok')),
+          owner TEXT,
+          country TEXT,
+          note TEXT,
+          next_step TEXT,
+          next_step_due INTEGER,
+          next_step_owner TEXT,
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO partners_new
+          SELECT id, name, type, owner, country, note, next_step, next_step_due,
+                 next_step_owner, status, created_at, updated_at
+          FROM partners;
+        DROP TABLE partners;
+        ALTER TABLE partners_new RENAME TO partners;
+      `)
+      if (fk) db.pragma('foreign_keys = ON')
+    }
+  } catch (err) {
+    logger.warn({ err }, "partners 'feladatok' type migration failed -- continuing")
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_partners_type ON partners(type)`)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_partners_owner ON partners(owner)`)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_partners_next_due ON partners(next_step_due)`)
@@ -1492,6 +1559,18 @@ export function initDatabase(dbPathOverride?: string): void {
   // ONE task list, not two: the kanban card IS the task, it just also hangs off a
   // partner. David's decision, 2026-10-08 -- two lists nobody maintains will drift apart.
   try { db.exec('ALTER TABLE kanban_cards ADD COLUMN partner_id TEXT REFERENCES partners(id)') } catch { /* already exists */ }
+
+  // VALASZ: "mi lett a megoldas" EGY mezoben, feladatonkent. David dontese,
+  // 2026-10-15 14:09 (Telegram 9836, a 2 felkinalt alak kozul az 1.): egy
+  // felulirhato valasz-mezo, NEM datumozott szal. Az indok az ő szavaiban van:
+  // "mi lett a megoldas" a VEGEREDMENY, abbol egy van.
+  //
+  // MIERT ITT, ES NEM A TOBBI kanban_cards-ALTER KOZOTT (fentebb, a ~190. sor):
+  // ott felette all a 'testing' CHECK-constraint miatti TABLA-UJRAEPITES, ami
+  // nevesitett oszloplistaval masol at, tehat egy afolott felvett oszlop egy regi
+  // telepitesen CSENDBEN elveszne. A partner_id pontosan ezert all itt, es a valasz
+  // ugyanebbe az osztalyba tartozik.
+  try { db.exec('ALTER TABLE kanban_cards ADD COLUMN valasz TEXT') } catch { /* already exists */ }
 
   // --- Idea Comments ---
   db.exec(`
@@ -3090,6 +3169,15 @@ export interface KanbanCard {
   priority: 'low' | 'normal' | 'high' | 'urgent'
   project: string | null
   parent_id: string | null
+  // A kartya partner-kotese (CRM). A KOLUMNA regota letezik es a `SELECT *`
+  // vissza is adja, csak ez a tipus nem mondta ki -- 2026-10-14-en a lepes-route
+  // (partners.ts) ezen bukott el tsc-ben, pedig az ertek ott volt a sorban.
+  // Egy tipus, ami kevesebbet mond, mint a tabla, ugyanugy hamis, mint az, ami
+  // tobbet: itt a kovetkezmeny az volt, hogy a helyes ellenorzest nem lehetett
+  // leirni. Irni tovabbra sem ezen keresztul kell, arra a linkCardToPartner van.
+  partner_id: string | null
+  // "Mi lett a megoldas" -- EGY felulirhato valasz feladatonkent (David, 2026-10-15).
+  valasz: string | null
   due_date: number | null
   start_date?: number | null
   sort_order: number
@@ -3491,7 +3579,7 @@ export function createKanbanCard(card: {
 // was writing one (e.g. `description_append`).
 export const KANBAN_WRITABLE_FIELDS = [
   'title', 'description', 'test_steps', 'status', 'assignee', 'priority', 'project',
-  'parent_id', 'due_date', 'start_date', 'sort_order', 'archived_at',
+  'parent_id', 'due_date', 'start_date', 'sort_order', 'archived_at', 'valasz',
 ] as const
 
 // The columns whose changes updateKanbanCard records in kanban_card_field_events
@@ -3578,9 +3666,9 @@ export function writeKanbanCard(
   // left the card changed with no row saying who changed it.
   return db.transaction((): KanbanCardWriteResult => {
     const changed = db.prepare(
-      `UPDATE kanban_cards SET title=?, description=?, test_steps=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, start_date=?, sort_order=?, updated_at=?, archived_at=?
+      `UPDATE kanban_cards SET title=?, description=?, test_steps=?, status=?, assignee=?, priority=?, project=?, parent_id=?, due_date=?, start_date=?, sort_order=?, updated_at=?, archived_at=?, valasz=?
        WHERE id=? AND (? IS NULL OR version=?)`
-    ).run(f.title, f.description, f.test_steps, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.start_date ?? null, f.sort_order, f.updated_at, f.archived_at, id, guard, guard).changes > 0
+    ).run(f.title, f.description, f.test_steps, f.status, f.assignee, f.priority, f.project, f.parent_id, f.due_date, f.start_date ?? null, f.sort_order, f.updated_at, f.archived_at, f.valasz, id, guard, guard).changes > 0
     if (!changed) {
       // Gone, or (only with a version) moved on between the read above and this write.
       const current = getKanbanCard(id)
@@ -3909,6 +3997,13 @@ export function deleteKanbanCard(id: string): boolean {
     // "blocked by" a card that no longer exists -- a block nobody can clear.
     db.prepare('DELETE FROM kanban_card_blockers WHERE card_id = ? OR blocker_id = ?').run(cardId, cardId)
     db.prepare('UPDATE kanban_cards SET parent_id = NULL WHERE parent_id = ?').run(cardId)
+    // 5. A csatolmany-SOROK is mennek, kulonben a torolt kartya fajljai arvan
+    //    maradnanak a tablaban, es a `/api/kanban/attachments/<id>/download`
+    //    tovabbra is kiszolgalna oket egy kartya nelkul. A LEMEZEN levo fajlt
+    //    itt NEM toroljuk: ez a fuggveny csak az adatbazist ismeri, a fajl
+    //    takaritasat a hivo vegpont vegzi, ahol a tarolo-gyoker ellenorzese is
+    //    megvan. A sor torlese igy is helyes: a hivatkozas szunik meg.
+    db.prepare('DELETE FROM kanban_attachments WHERE card_id = ?').run(cardId)
     return db.prepare('DELETE FROM kanban_cards WHERE id = ?').run(cardId).changes > 0
   })(id) as boolean
 }
@@ -6267,7 +6362,7 @@ export function getTelegramHistory(chatId: string, limit: number = 50): Telegram
 // a date is a partner we have lost; that list is what gets shown daily, not the
 // full database.
 
-export type PartnerType = 'beszallito' | 'vevo' | 'szolgaltato' | 'erdeklodo' | 'partner'
+export type PartnerType = 'beszallito' | 'vevo' | 'szolgaltato' | 'erdeklodo' | 'partner' | 'feladatok'
 
 export interface PartnerRow {
   id: string
@@ -6309,6 +6404,17 @@ export interface PartnerInteractionRow {
   created_at: number
 }
 
+// A partner-kartyan megjelenitett NYITOTT feladat. Kulon tipus, mert a lista-vegpont
+// adja vissza, es a frontend ebbol rajzolja a kartyat (cim, datum, felelos).
+export interface PartnerOpenTask {
+  id: string
+  partner_id: string
+  title: string
+  due_date: string | null
+  assignee: string | null
+  priority: string | null
+}
+
 export function listPartners(opts?: { type?: PartnerType; owner?: string; status?: PartnerRow['status']; q?: string; assignee?: string }): PartnerRow[] {
   let q = 'SELECT * FROM partners WHERE 1=1'
   const params: string[] = []
@@ -6342,10 +6448,33 @@ export function listPartners(opts?: { type?: PartnerType; owner?: string; status
   const szamok = db.prepare(szamQ).all(...szamParams) as
     { partner_id: string; nyitott: number; osszes: number }[]
   const terkep = new Map(szamok.map((s) => [s.partner_id, s]))
+  // David 2026-10-15 12:03 (Telegram 9786, 3. pont): "Van nyitott feladatnál latszodjanak
+  // a feladatok is ne csak az, hogy '1nyitott feladat'". Plusz a 2. pont: a feladat DATUMA
+  // szerint rangsorolva. A datum nelkuli tetel a VEGERE megy, nem az elejere: egy datum
+  // nelkuli feladat nem surgosebb, mint egy holnapi. (A partner-lapon a listPartnerCards
+  // mar igy rendez, ott nem kellett valtoztatni -- lemerve, nem feltetelezve.)
+  //
+  // EGY lekerdezes az egeszre, nem partnerenkent egy, es UGYANAZ az assignee-szuro all ra,
+  // mint a darabszamra: kulonben a kartyan 7 tetel latszana, a szamban meg egy.
+  const tetelParams: string[] = []
+  let tetelQ =
+    `SELECT id, partner_id, title, due_date, assignee, priority
+       FROM kanban_cards
+      WHERE partner_id IS NOT NULL AND archived_at IS NULL AND status != 'done'`
+  if (opts?.assignee) { tetelQ += ' AND assignee = ?'; tetelParams.push(opts.assignee) }
+  tetelQ += ' ORDER BY (due_date IS NULL) ASC, due_date ASC, created_at ASC'
+  const tetelek = db.prepare(tetelQ).all(...tetelParams) as PartnerOpenTask[]
+  const tetelTerkep = new Map<string, PartnerOpenTask[]>()
+  for (const t of tetelek) {
+    const lista = tetelTerkep.get(t.partner_id)
+    if (lista) lista.push(t)
+    else tetelTerkep.set(t.partner_id, [t])
+  }
   for (const r of rows) {
     const s = terkep.get(r.id)
     ;(r as PartnerRow & { open_tasks: number; all_tasks: number }).open_tasks = s?.nyitott ?? 0
     ;(r as PartnerRow & { open_tasks: number; all_tasks: number }).all_tasks = s?.osszes ?? 0
+    ;(r as PartnerRow & { open_list: PartnerOpenTask[] }).open_list = tetelTerkep.get(r.id) ?? []
   }
   // Felelos-szurovel csak az a partner erdekes, ahol van is tetele: enelkul a szuro
   // ugyanazt a 17 partnert adná vissza nullas darabszámmal, tehat nem szurne semmit.
@@ -6400,6 +6529,46 @@ export function createPartnerContact(c: Omit<PartnerContactRow, 'created_at' | '
   ).run(c.id, c.partner_id, c.name, c.email ?? null, c.phone ?? null, c.role ?? null, c.note ?? null, c.status, now, now)
 }
 
+/** Egy kapcsolattarto mezoinek modositasa. David kerese, 2026-10-14: a
+ *  partner-lapon a kapcsolattartot is lehessen szerkeszteni, ne csak felvenni.
+ *  Ugyanaz a mintazat, mint az updatePartner: csak a MEGADOTT mezok irodnak,
+ *  tehat egy reszleges patch nem nullazza a tobbit. */
+export function updatePartnerContact(
+  id: string,
+  patch: Partial<Omit<PartnerContactRow, 'id' | 'partner_id' | 'created_at' | 'updated_at'>>,
+): boolean {
+  const now = Math.floor(Date.now() / 1000)
+  const sets: string[] = ['updated_at = ?']
+  const params: unknown[] = [now]
+  for (const k of ['name', 'email', 'phone', 'role', 'note', 'status'] as const) {
+    if (patch[k] !== undefined) { sets.push(`${k} = ?`); params.push(patch[k]) }
+  }
+  params.push(id)
+  return db.prepare(`UPDATE partner_contacts SET ${sets.join(', ')} WHERE id = ?`).run(...params).changes > 0
+}
+
+/** Egy kapcsolattarto VEGLEGES torlese. David kerese, 2026-10-14 (Telegram 9734).
+ *  Szandekosan HARD delete, nem status='inactive': arra mar van kulon ut a lapon
+ *  (aktiv / nem aktiv legordulo), es a ketto mast jelent. A "nem aktiv" azt
+ *  mondja, hogy a szemely letezett es mar nem ott dolgozik, ezert a nyoma ertek;
+ *  a torles azt, hogy a SOR MAGA hibas volt (elutes, duplikatum, teszt-adat), es
+ *  olyanbol nem kell nyom. */
+export function deletePartnerContact(id: string): boolean {
+  return db.prepare('DELETE FROM partner_contacts WHERE id = ?').run(id).changes > 0
+}
+
+/** Egy kartya lepesei (gyerek-kartyai). Azert kell, mert egy szulo torlese
+ *  arvan hagyna oket, es a torles elott ezt MERNI kell, nem felteteleznunk. */
+export function countKanbanChildren(cardId: string): number {
+  const r = db.prepare('SELECT COUNT(*) n FROM kanban_cards WHERE parent_id = ? AND archived_at IS NULL')
+    .get(cardId) as { n: number }
+  return r.n
+}
+
+export function getPartnerContact(id: string): PartnerContactRow | undefined {
+  return db.prepare('SELECT * FROM partner_contacts WHERE id = ?').get(id) as PartnerContactRow | undefined
+}
+
 export function listPartnerInteractions(partnerId: string, limit = 50): PartnerInteractionRow[] {
   return db.prepare('SELECT * FROM partner_interactions WHERE partner_id = ? ORDER BY happened_at DESC LIMIT ?')
     .all(partnerId, limit) as PartnerInteractionRow[]
@@ -6413,12 +6582,25 @@ export function createPartnerInteraction(i: Omit<PartnerInteractionRow, 'created
   ).run(i.id, i.partner_id, i.contact_id ?? null, i.happened_at, i.kind, i.summary, i.source ?? null, i.created_by ?? null, now)
 }
 
-/** Kanban cards bound to a partner. ONE task list: these are ordinary cards. */
-export function listPartnerCards(partnerId: string, includeDone = true): { id: string; title: string; status: string; assignee: string | null; due_date: string | null }[] {
-  let q = 'SELECT id, title, status, assignee, due_date FROM kanban_cards WHERE partner_id = ? AND archived_at IS NULL'
+/** Kanban cards bound to a partner. ONE task list: these are ordinary cards.
+ *
+ *  A `priority` ES a `parent_id` 2026-10-14-en kerult bele, ket kulon okbol:
+ *
+ *  - `priority`: a partner-lapon aznap prioritas-legordulo lett a feladat-soron
+ *    (David kerese, Telegram 9717). A mezo viszont NEM jott vissza ezen a
+ *    vegponton, tehat a legordulo MINDEN kartyat "normal"-nak mutatott, akkor is,
+ *    ha a tablan `high` vagy `urgent` allt rajta. Mert eset: a 93e97e68 partner
+ *    kartyainak kulcsai id/title/status/assignee/due_date voltak, priority nelkul.
+ *    Egy legordulo, ami rossz erteket mutat, rosszabb, mint ha nem is lenne ott:
+ *    az olvaso elhiszi.
+ *  - `parent_id`: a feladatok LEPESEI alkartyak (David dontese, Telegram 9727,
+ *    az (a) valtozat). A lap enelkul nem tudja, melyik kartya kinek a lepese.
+ */
+export function listPartnerCards(partnerId: string, includeDone = true): { id: string; title: string; status: string; assignee: string | null; due_date: string | null; priority: string | null; parent_id: string | null; valasz: string | null }[] {
+  let q = 'SELECT id, title, status, assignee, due_date, priority, parent_id, valasz FROM kanban_cards WHERE partner_id = ? AND archived_at IS NULL'
   if (!includeDone) q += " AND status != 'done'"
   q += ' ORDER BY (status = \'done\') ASC, due_date IS NULL, due_date ASC'
-  return db.prepare(q).all(partnerId) as { id: string; title: string; status: string; assignee: string | null; due_date: string | null }[]
+  return db.prepare(q).all(partnerId) as { id: string; title: string; status: string; assignee: string | null; due_date: string | null; priority: string | null; parent_id: string | null; valasz: string | null }[]
 }
 
 export interface IdeaBoxRow {
@@ -6589,6 +6771,56 @@ export function addIdeaAttachment(row: IdeaAttachmentRow): void {
 
 export function deleteIdeaAttachment(id: string): boolean {
   return db.prepare('DELETE FROM idea_attachments WHERE id = ?').run(id).changes > 0
+}
+
+// --- Kanban card attachments ---
+
+export interface KanbanAttachmentRow {
+  id: string
+  card_id: string
+  filename: string
+  stored_path: string
+  mime: string
+  size: number
+  uploaded_by: string | null
+  created_at: number
+}
+
+export function listKanbanAttachments(cardId: string): KanbanAttachmentRow[] {
+  return db.prepare('SELECT * FROM kanban_attachments WHERE card_id = ? ORDER BY created_at ASC')
+    .all(cardId) as KanbanAttachmentRow[]
+}
+
+/** Egy lekerdezes tobb kartyara: a partner-lap egyszerre tiz-husz feladatot rajzol,
+ *  es kartyankenti kulon lekerdezes ott N+1-et csinalna. */
+export function listKanbanAttachmentsForCards(cardIds: string[]): Map<string, KanbanAttachmentRow[]> {
+  const ki = new Map<string, KanbanAttachmentRow[]>()
+  if (!cardIds.length) return ki
+  const helyek = cardIds.map(() => '?').join(',')
+  const sorok = db.prepare(
+    `SELECT * FROM kanban_attachments WHERE card_id IN (${helyek}) ORDER BY created_at ASC`,
+  ).all(...cardIds) as KanbanAttachmentRow[]
+  for (const sor of sorok) {
+    const lista = ki.get(sor.card_id)
+    if (lista) lista.push(sor)
+    else ki.set(sor.card_id, [sor])
+  }
+  return ki
+}
+
+export function getKanbanAttachment(id: string): KanbanAttachmentRow | undefined {
+  return db.prepare('SELECT * FROM kanban_attachments WHERE id = ?').get(id) as KanbanAttachmentRow | undefined
+}
+
+export function addKanbanAttachment(row: KanbanAttachmentRow): void {
+  db.prepare(
+    `INSERT INTO kanban_attachments (id, card_id, filename, stored_path, mime, size, uploaded_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(row.id, row.card_id, row.filename, row.stored_path, row.mime, row.size, row.uploaded_by ?? null, row.created_at)
+}
+
+export function deleteKanbanAttachment(id: string): boolean {
+  return db.prepare('DELETE FROM kanban_attachments WHERE id = ?').run(id).changes > 0
 }
 
 // --- Idea Status Log ---

@@ -21003,9 +21003,238 @@ const PN_STATUSZ_LABEL = {
   planned: 'tervezett', in_progress: 'folyamatban', waiting: 'várakozik', done: 'kész',
 }
 
+const PN_PRIO_LABEL = {
+  low: 'alacsony', normal: 'normál', high: 'magas', urgent: 'sürgős',
+}
+
+/** A statusz- es prioritas-legordulok a + Feladat form szovegeit hasznaljak, nem a
+ *  kanban i18n-t: a partner-lap vegig magyar, es ket kulonbozo szohasznalat ugyanarra
+ *  a negy allapotra ugyanazon a lapon zavaro. Az ISMERETLEN ertek sajat sorkent
+ *  jelenik meg (mint a felelosnel), hogy ne tunjon el nemán, ami a kartyan all. */
+/**
+ * A partner-lap feladat-listaja, LEPESEKKEL. David dontese, 2026-10-14
+ * (Telegram 9727, az (a) valtozat): minden lepes onallo alfeladat, sajat
+ * felelossel es hataridovel, es a kanban tablan is latszik. A tarolo a kanban
+ * sajat `parent_id`-ja, uj tabla nem kellett hozza.
+ *
+ * MIERT KULON FUGGVENY: a listat csoportositani kell (szulo, utana a sajat
+ * lepesei), es egy template-literalba agyazott csoportositas olvashatatlan.
+ *
+ * AMI A SORRENDBOL FONTOS: a szulok a szerver sorrendjeben maradnak (lezartak a
+ * vegen, aztan hatarido szerint), a lepesek pedig a SAJAT szulojuk alatt, szinten
+ * a szerver sorrendjeben. Egy ARVA lepes (a szuloje lezart es el van rejtve, vagy
+ * mas partnerhez tartozik) NEM esik ki: a lista vegen jelenik meg, kimondva, hogy
+ * a szuloje nem latszik. Enelkul egy nyitott lepes nemán eltunne a laprol.
+ */
+function _pnFeladatokHtml(p, cards) {
+  if (!cards || !cards.length) return '<div class="pn-empty">Nincs ehhez a partnerhez kötött kártya.</div>'
+  const szulok = cards.filter(c => !c.parent_id)
+  const szuloIdk = new Set(szulok.map(c => c.id))
+  const lepesek = new Map()
+  const arvak = []
+  for (const c of cards) {
+    if (!c.parent_id) continue
+    if (szuloIdk.has(c.parent_id)) {
+      if (!lepesek.has(c.parent_id)) lepesek.set(c.parent_id, [])
+      lepesek.get(c.parent_id).push(c)
+    } else {
+      arvak.push(c)
+    }
+  }
+  const blokk = szulok.map(c => {
+    const sajat = lepesek.get(c.id) || []
+    const kesz = sajat.filter(x => x.status === 'done').length
+    return _pnFeladatSorHtml(p, c, false, sajat.length ? `${kesz}/${sajat.length} lépés kész` : '')
+      + sajat.map(l => _pnFeladatSorHtml(p, l, true, '')).join('')
+      + `<div id="pnLepesForm-${c.id}" class="pn-lepes" hidden>
+          <div class="pn-item">
+            <input id="pnLepesTitle-${c.id}" class="input" style="width:100%;font-size:12.5px" placeholder="Mi a lépés? Egy mondat.">
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+              <input id="pnLepesDue-${c.id}" class="input" type="date" style="width:145px;font-size:12px">
+              <select id="pnLepesAssignee-${c.id}" class="input" style="width:130px;font-size:12px">${_felelosOpciok(c.assignee || '')}</select>
+              <button class="btn-primary btn-compact" onclick="saveLepes('${p.id}','${c.id}')">Mentés</button>
+              <button class="btn-secondary btn-compact" onclick="hideLepesForm('${c.id}')">Mégse</button>
+              <span id="pnLepesMsg-${c.id}" style="font-size:12px;color:var(--text-muted)"></span>
+            </div>
+          </div>
+        </div>`
+  }).join('')
+  const arvaBlokk = arvak.length
+    ? `<div class="pn-empty" style="padding-top:10px">Lépés, aminek a szülő feladata most nem látszik (lezárva és elrejtve, vagy más partnernél van). Azért van itt, hogy ne tűnjön el:</div>`
+      + arvak.map(l => _pnFeladatSorHtml(p, l, true, '')).join('')
+    : ''
+  return blokk + arvaBlokk
+}
+
+/** Egy feladat- vagy lepes-sor. A `lepes` igaz voltakor behuzva jelenik meg, es
+ *  NEM kap "+ Lepes" gombot: egy szint van, ahogy a szerver is korlatozza. */
+function _pnFeladatSorHtml(p, c, lepes, jelzes) {
+  return `<div class="pn-item${c.status === 'done' ? ' is-done' : ''}${lepes ? ' pn-lepes-sor' : ''}">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <input type="checkbox" ${c.status === 'done' ? 'checked' : ''} title="Kész"
+                 data-elozo="${c.status}"
+                 style="margin-top:3px;width:17px;height:17px;flex:none;cursor:pointer"
+                 onchange="toggleTaskDone('${p.id}','${c.id}', this.checked, this.dataset.elozo)">
+          <div style="min-width:0;flex:1">
+            <input class="pn-task-title" value="${escapeHtml(c.title)}" data-eredeti="${escapeHtml(c.title)}"
+                   title="Kattints ide a cím átírásához. Mentés: Enter vagy kattintás máshova."
+                   onkeydown="if(event.key==='Enter'){this.blur()}else if(event.key==='Escape'){this.value=this.dataset.eredeti;this.blur()}"
+                   onchange="patchTaskTitle('${p.id}','${c.id}', this)">
+            <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
+              <select class="input" style="width:120px;font-size:11.5px;padding:3px 6px"
+                      onchange="patchTask('${p.id}','${c.id}',{assignee:this.value})">
+                ${_felelosOpciok(c.assignee)}
+              </select>
+              <input type="date" class="input" style="width:135px;font-size:11.5px;padding:3px 6px"
+                     value="${c.due_date || ''}"
+                     onchange="patchTask('${p.id}','${c.id}',{due_date:this.value})">
+              <select class="input" style="width:118px;font-size:11.5px;padding:3px 6px" title="Státusz"
+                      onchange="patchTaskStatus('${p.id}','${c.id}', this.value, '${c.status}')">
+                ${_pnStatuszOpciok(c.status)}
+              </select>
+              <select class="input" style="width:105px;font-size:11.5px;padding:3px 6px" title="Prioritás"
+                      onchange="patchTask('${p.id}','${c.id}',{priority:this.value})">
+                ${_pnPrioOpciok(c.priority)}
+              </select>
+              ${lepes ? '' : `<button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" onclick="showLepesForm('${c.id}')">+ Lépés</button>`}
+              <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" title="Mi lett a megoldás?" onclick="showValaszForm('${c.id}')">${c.valasz ? 'Válasz átírása' : '+ Válasz'}</button>
+              <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" title="Dokumentum vagy kép csatolása (max. 20 MB)" onclick="document.getElementById('pnFajl-${c.id}').click()">+ Fájl</button>
+              <input id="pnFajl-${c.id}" type="file" hidden
+                     onchange="pnFajlFeltolt('${p.id}','${c.id}', this)">
+              ${jelzes ? `<span class="pn-chip">${escapeHtml(jelzes)}</span>` : ''}
+              <button class="pn-torles" title="${lepes ? 'Lépés törlése' : 'Feladat törlése'}"
+                      onclick="deleteTask('${p.id}','${c.id}', this.dataset.cim, ${lepes})"
+                      data-cim="${escapeHtml(c.title)}">&times;</button>
+            </div>
+            ${_pnCsatolmanyokHtml(p, c)}
+            ${_pnValaszHtml(p, c)}
+          </div>
+        </div>
+      </div>`
+}
+
+/** A feladathoz csatolt fajlok sora. David kerese, 2026-10-22 14:10 (Telegram 10558):
+ *  "Fajlt lehessen feltolteni a feladatoz, dokumentum, kis kep".
+ *
+ *  A lista a partner-lap valaszabol jon (card.attachments), tehat NEM kell kulon
+ *  lekerdezes feladatonkent. Kep eseten kis elonezet is megjelenik, mert a kerese
+ *  szerint a tipikus eset egy "kis kep", es annal a fajlnev semmit nem mond. */
+function _pnCsatolmanyokHtml(p, c) {
+  const lista = Array.isArray(c.attachments) ? c.attachments : []
+  if (!lista.length) return ''
+  // A LINK NEM LEHET SIMA <a href> ES A BELYEGKEP NEM LEHET SIMA <img src>.
+  // Az /api/* vegpontok Bearer tokent kernek, amit a globalis fetch-burkolo tesz
+  // ra (app.js 125-140). Egy sima navigacio vagy kep-betoltes NEM megy at ezen a
+  // burkolon, tehat 401-et kap -- ugyanaz a csapda, amit az agens-export gombnal
+  // mar leirtunk (l. a 'window.location download cannot carry the Authorization
+  // header' megjegyzest). Ezert minden letoltes fetch -> Blob -> objectURL uton
+  // megy. MERVE 2026-10-22: David nem tudta megnyitni a feltoltott kepet, mert az
+  // elso valtozatom sima linket rajzolt.
+  const elem = a => {
+    const kep = typeof a.mime === 'string' && a.mime.startsWith('image/')
+    const meret = a.size >= 1024 * 1024
+      ? (a.size / 1024 / 1024).toFixed(1) + ' MB'
+      : Math.max(1, Math.round(a.size / 1024)) + ' kB'
+    return `<span class="pn-csatolmany">
+        <a href="#" onclick="pnFajlMegnyit(event,'${a.id}', this.dataset.nev)"
+           data-nev="${escapeHtml(a.filename)}" title="${escapeHtml(a.filename)}">
+          ${kep ? `<img data-att="${a.id}" alt="" class="pn-csatolmany-kep">` : ''}<span>${escapeHtml(a.filename)}</span>
+        </a>
+        <span class="pn-csatolmany-meret">${meret}</span>
+        <button class="pn-torles" title="Csatolmány törlése"
+                onclick="pnFajlTorles('${p.id}','${a.id}', this.dataset.nev)"
+                data-nev="${escapeHtml(a.filename)}">&times;</button>
+      </span>`
+  }
+  return `<div class="pn-csatolmanyok">${lista.map(elem).join('')}</div>`
+}
+
+/**
+ * "Mi lett a megoldas" -- EGY valasz feladatonkent, felulirhato. David kerese es
+ * dontese, 2026-10-15 (Telegram 9832 es 9836, a ket felkinalt alak kozul az 1.).
+ *
+ * MIERT NEM A KOMMENT-SZAL: a kanban_comments letezik, de a partner lapja egyetlen
+ * kommentet sem jelenitett meg, es a kerdes amit o feltett ("mi lett a megoldas") egy
+ * VEGEREDMENYT kert, nem elozmenyt. Egy szal ugyanazt a kerdest N valasszal felelne meg,
+ * es a lapon nem latszana, melyik az ervenyes.
+ *
+ * A MEGLEVO MENTESI UTAT HASZNALJA: patchTask -> PUT /api/kanban/<id>, mert a `valasz`
+ * bekerult a KANBAN_WRITABLE_FIELDS-be. Uj vegpont nem kellett hozza.
+ */
+function _pnValaszHtml(p, c) {
+  const van = typeof c.valasz === 'string' && c.valasz.trim() !== ''
+  const szoveg = van
+    ? `<div class="pn-valasz"><span class="pn-valasz-fej">Válasz</span><span class="pn-valasz-szoveg">${escapeHtml(c.valasz).replace(/\n/g, '<br>')}</span></div>`
+    : ''
+  return szoveg + `
+            <div id="pnValaszForm-${c.id}" class="pn-valasz-szerk" hidden>
+              <textarea id="pnValaszText-${c.id}" class="input" rows="3" style="width:100%;font-size:12.5px;resize:vertical"
+                        placeholder="Mi lett a megoldás? Egy-két mondat.">${van ? escapeHtml(c.valasz) : ''}</textarea>
+              <div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+                <button class="btn-primary btn-compact" onclick="saveValasz('${p.id}','${c.id}')">Mentés</button>
+                <button class="btn-secondary btn-compact" onclick="hideValaszForm('${c.id}')">Mégse</button>
+                ${van ? `<button class="btn-secondary btn-compact" title="A válasz törlése, a feladat marad" onclick="clearValasz('${p.id}','${c.id}')">Válasz törlése</button>` : ''}
+                <span id="pnValaszMsg-${c.id}" style="font-size:12px;color:var(--text-muted)"></span>
+              </div>
+            </div>`
+}
+
+function showValaszForm(cardId) {
+  const el = document.getElementById('pnValaszForm-' + cardId)
+  if (!el) return
+  el.hidden = !el.hidden
+  if (!el.hidden) {
+    const t = document.getElementById('pnValaszText-' + cardId)
+    if (t) t.focus()
+  }
+}
+
+function hideValaszForm(cardId) {
+  const el = document.getElementById('pnValaszForm-' + cardId)
+  if (el) el.hidden = true
+}
+
+async function saveValasz(partnerId, cardId) {
+  const t = document.getElementById('pnValaszText-' + cardId)
+  if (!t) return
+  const msg = document.getElementById('pnValaszMsg-' + cardId)
+  // AZ URES MENTES NEM TORLES: arra kulon gomb van. Egy veletlen kiurites nem
+  // nemithatja el a mar rogzitett megoldast.
+  if (t.value.trim() === '') {
+    if (msg) msg.textContent = 'Üres. Törléshez a "Válasz törlése" gomb.'
+    return
+  }
+  await patchTask(partnerId, cardId, { valasz: t.value.trim() })
+}
+
+async function clearValasz(partnerId, cardId) {
+  if (!confirm('Töröljem a választ? A feladat megmarad.')) return
+  await patchTask(partnerId, cardId, { valasz: null })
+}
+
+function _pnStatuszOpciok(kivalasztott) {
+  const k = kivalasztott || 'planned'
+  const sorok = Object.entries(PN_STATUSZ_LABEL)
+    .map(([e, n]) => `<option value="${e}"${k === e ? ' selected' : ''}>${n}</option>`).join('')
+  const extra = PN_STATUSZ_LABEL[k] ? '' : `<option value="${escapeHtml(k)}" selected>${escapeHtml(k)} (ismeretlen)</option>`
+  return sorok + extra
+}
+
+function _pnPrioOpciok(kivalasztott) {
+  const k = kivalasztott || 'normal'
+  const sorok = Object.entries(PN_PRIO_LABEL)
+    .map(([e, n]) => `<option value="${e}"${k === e ? ' selected' : ''}>${n}</option>`).join('')
+  const extra = PN_PRIO_LABEL[k] ? '' : `<option value="${escapeHtml(k)}" selected>${escapeHtml(k)} (ismeretlen)</option>`
+  return sorok + extra
+}
+
 const PARTNER_TYPE_LABEL = {
   beszallito: 'beszállító', vevo: 'vevő', szolgaltato: 'szolgáltató',
   erdeklodo: 'érdeklődő', partner: 'partner',
+  // David kérése, 2026-10-20 (Telegram 10196): "Új típus: Feladatok". Olyan
+  // partner-lapot akart, amin a saját nyitott tételei együtt látszanak, mert a
+  // kanban-oszlopban húsz kártya egymás alatt neki olvashatatlan volt.
+  feladatok: 'feladatok',
 }
 
 function _partnerInitials(nev) {
@@ -21049,9 +21278,56 @@ function _partnerCardHtml(p) {
       <div class="pn-main">
         <div class="pn-name">${escapeHtml(p.name)}<span class="pn-chip">${PARTNER_TYPE_LABEL[p.type] || p.type}</span></div>
         <div class="pn-count-line is-${cls}">${szam}${lezart > 0 ? `<span class="pn-meta" style="margin:0">&middot; ${lezart} lezárt</span>` : ''}</div>
+        ${_pnKartyaTetelekHtml(p)}
       </div>
     </div>
   </div>`
+}
+
+/* David 2026-10-15 12:03-12:04 (Telegram 9786 es 9788), harom pontja egy helyen:
+ *   3. "Van nyitott feladatnál latszodjanak a feladatok is ne csak az, hogy '1nyitott feladat'"
+ *   2. "a feladat dátuma szerint legyen rangsorolva, sorrendbe állítva"
+ *   4. "és a felelősök nevei is látszódjanak, ha mindenkire szűrve maradok"
+ *
+ * A RENDEZES A SZERVEREN TORTENIK (listPartners: datum szerint, a datum nelkuli a vegen),
+ * mert ugyanaz a sorrend kell a lista-vegponton es a partner-lapon is. A frontend NEM
+ * rendez ujra: ha ketten rendeznek, ket kulonbozo sorrend lesz, es az egyik csendben nyer.
+ *
+ * A FELELOS NEVE CSAK SZURETLEN NEZETBEN latszik, pontosan ahogy David kerte: ha egy
+ * konkret felelosre szurt, a nev minden soron ugyanaz lenne, tehat nulla informacio.
+ *
+ * A HARMAS KORLAT SAJAT DONTES, es kimondom, mert nem o kerte: harom tetel folott a
+ * kartya magassaga elvinne a lista attekinthetoseget, ezert a tobbit egy "+N tovabbi"
+ * sor jelzi. Ha mind kell, egy szam atirasa.
+ */
+const PN_KARTYA_TETEL_MAX = 3
+
+function _pnKartyaTetelekHtml(p) {
+  const lista = Array.isArray(p.open_list) ? p.open_list : []
+  if (!lista.length) return ''
+  const mutat = lista.slice(0, PN_KARTYA_TETEL_MAX)
+  const tobbi = lista.length - mutat.length
+  const sorok = mutat.map(t => {
+    const d = _pnTetelDatum(t.due_date)
+    const fel = (!_partnerAssignee && t.assignee) ? `<span class="pn-tetel-felelos">${escapeHtml(_felelosNev(t.assignee))}</span>` : ''
+    return `<li class="pn-tetel"><span class="pn-tetel-cim">${escapeHtml(t.title)}</span>${d}${fel}</li>`
+  }).join('')
+  return `<ul class="pn-tetel-lista">${sorok}${tobbi > 0 ? `<li class="pn-tetel pn-tetel-tobbi">+${tobbi} további</li>` : ''}</ul>`
+}
+
+/* A datum-cimke HARMADIK allapotot is ismer: a datum nelkuli tetelnel NEM irunk oda
+ * semmit. Egy "nincs datum" cimke minden soron ott allna, es pont azt nyomna el, ami
+ * erdekes (a lejart es a mai). */
+function _pnTetelDatum(due) {
+  if (!due) return ''
+  const ma = new Date(); ma.setHours(0, 0, 0, 0)
+  const d = new Date(due + 'T00:00:00')
+  if (isNaN(d.getTime())) return ''
+  const nap = Math.round((d - ma) / 86400000)
+  if (nap < 0) return `<span class="pn-tetel-datum is-late">${-nap} napja lejárt</span>`
+  if (nap === 0) return `<span class="pn-tetel-datum is-soon">ma</span>`
+  if (nap === 1) return `<span class="pn-tetel-datum is-soon">holnap</span>`
+  return `<span class="pn-tetel-datum">${d.toLocaleDateString('hu-HU')}</span>`
 }
 
 const PN_DOT = { late: '#d9534f', soon: '#d9a441', ok: '#4caf7d', none: 'var(--text-muted)' }
@@ -21112,6 +21388,37 @@ async function loadPartnersPage() {
     </div>`
 }
 
+// Aruhaz-kimutatas gomb (David kerese, 2026-10-14). A gomb CSAK ott latszik, ahol a
+// partner note-jaban van IDP SAP-kod: az a 43 MediaMarkt aruhaz, es a kod maga az
+// azonosito, ami nelkul a riport le sem kerdezheto.
+//
+// A HIBAT KIIRJUK, NEM NYELJUK EL. Egy ures kimutatas es egy elszallt lekerdezes
+// ket KULON allapot: ha osszemossuk, a kollega azt hiszi, nincs mit rendelni.
+async function aruhazKimutatas(id) {
+  const btn = document.getElementById('pnKimutatasBtn')
+  const msg = document.getElementById('pnKimutatasMsg')
+  const out = document.getElementById('pnKimutatasOut')
+  if (!btn || !msg || !out) return
+  btn.disabled = true
+  const eredetiFelirat = btn.textContent
+  btn.textContent = 'Dolgozom...'
+  msg.textContent = 'Bejelentkezés az IDP-be, riport letöltése, összevetés a Next-exporttal. Ez fél perc is lehet.'
+  out.textContent = ''
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(id)}/aruhaz-kimutatas`, { method: 'POST' })
+    const d = await r.json()
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status))
+    msg.textContent = `Kész, ${d.sap} áruház. Négy szakasz, egymás alatt.`
+    out.textContent = (d.blokkok || []).join('\n\n' + '─'.repeat(28) + '\n\n')
+  } catch (e) {
+    msg.textContent = 'A lekérdezés NEM sikerült, tehát ez nem azt jelenti, hogy nincs mit rendelni.'
+    out.textContent = String(e.message || e)
+  } finally {
+    btn.disabled = false
+    btn.textContent = eredetiFelirat
+  }
+}
+
 async function openPartner(id) {
   const lista = document.getElementById('partnersList')
   const reszlet = document.getElementById('partnerDetail')
@@ -21142,6 +21449,15 @@ async function openPartner(id) {
     </div>
     ${p.note ? `<div class="pn-item" style="line-height:1.55">${escapeHtml(p.note)}</div>` : ''}
 
+    ${/SAP k[oó]d:\s*[A-Z]\d{3}/.test(p.note || '') ? `
+    <div class="pn-section">Áruház-kimutatás
+      <button class="btn-primary btn-compact" style="text-transform:none;letter-spacing:0" id="pnKimutatasBtn" onclick="aruhazKimutatas('${p.id}')">Lekérem az adatokat</button>
+    </div>
+    <div class="pn-item" id="pnKimutatasBox">
+      <div class="pn-meta" id="pnKimutatasMsg">Friss IDP-riport letöltése és összevetése a saját készletünkkel. Körülbelül fél perc.</div>
+      <div id="pnKimutatasOut" style="white-space:pre-wrap;font-size:12.5px;line-height:1.5;margin-top:10px"></div>
+    </div>` : ''}
+
     <div class="pn-section">Kapcsolattartók &middot; ${d.contacts.length}
       <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showContactForm('${p.id}')">+ Kapcsolattartó</button>
     </div>
@@ -21166,17 +21482,46 @@ async function openPartner(id) {
         // A mailto a SAJAT levelezodet nyitja meg: a level Tole megy, nem a rendszerbol.
         // Ez szandekos, mert a rendszerbol kimeno level jovahagyas-koteles, egy
         // kapcsolattartora kattintas viszont nem az.
+        //
+        // AMI 2026-10-14-EN VALTOZOTT, ES MIERT (David kerese, Telegram 9720):
+        // eddig a TELJES sor egy mailto-link volt. Szerkesztheto mezokkel ez nem
+        // mukodik: minden kattintas a levelezot nyitotta volna meg ahelyett, hogy a
+        // kurzort a mezobe tenne. Ezert a sor mostantol div, a mailto pedig a
+        // "level" cimken all, kulon linkkent. A kepesseg megmarad, csak celzottabb lett.
         const vanEmail = !!(c.email && c.email.trim())
-        const sorBelso = `<div class="pn-row">
-          <div class="pn-avatar">${_partnerInitials(c.name)}</div>
-          <div class="pn-main">
-            <div class="pn-name" style="font-size:13px">${escapeHtml(c.name)}${vanEmail ? ' <span class="pn-chip">levél</span>' : ''}</div>
-            <div class="pn-meta">${[c.role, c.email, c.phone].filter(Boolean).map(escapeHtml).join(' &middot; ') || 'nincs elérhetőség rögzítve'}</div>
+        const mailtoCim = vanEmail ? encodeURIComponent(c.email).replace(/%40/g, '@') : ''
+        const mezo = (kulcs, ertek, helykitolto, szel) =>
+          `<input class="pn-inline" style="${szel}" placeholder="${helykitolto}"
+                  value="${escapeHtml(ertek || '')}" data-eredeti="${escapeHtml(ertek || '')}"
+                  onkeydown="if(event.key==='Enter'){this.blur()}else if(event.key==='Escape'){this.value=this.dataset.eredeti;this.blur()}"
+                  onchange="patchContact('${p.id}','${c.id}',{${kulcs}:this.value})">`
+        return `<div class="pn-item${c.status === 'inactive' ? ' is-done' : ''}">
+          <div class="pn-row">
+            <div class="pn-avatar">${_partnerInitials(c.name)}</div>
+            <div class="pn-main">
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <input class="pn-inline pn-inline-nev" value="${escapeHtml(c.name)}" data-eredeti="${escapeHtml(c.name)}"
+                       title="A név kötelező. Enter ment, Escape eldob."
+                       onkeydown="if(event.key==='Enter'){this.blur()}else if(event.key==='Escape'){this.value=this.dataset.eredeti;this.blur()}"
+                       onchange="patchContactName('${p.id}','${c.id}', this)">
+                ${vanEmail ? `<a class="pn-chip" style="text-decoration:none" href="mailto:${mailtoCim}" title="Levél írása a saját leveleződdel">levél</a>` : ''}
+              </div>
+              <div style="display:flex;gap:6px;margin-top:5px;align-items:center;flex-wrap:wrap">
+                ${mezo('role', c.role, 'beosztás', 'width:120px')}
+                ${mezo('email', c.email, 'e-mail cím', 'width:190px')}
+                ${mezo('phone', c.phone, 'telefon', 'width:130px')}
+                <select class="input" style="width:100px;font-size:11.5px;padding:3px 6px" title="Aktív vagy már nem dolgozik ott"
+                        onchange="patchContact('${p.id}','${c.id}',{status:this.value})">
+                  <option value="active"${c.status !== 'inactive' ? ' selected' : ''}>aktív</option>
+                  <option value="inactive"${c.status === 'inactive' ? ' selected' : ''}>nem aktív</option>
+                </select>
+                <button class="pn-torles" title="Kapcsolattartó törlése"
+                        onclick="deleteContact('${p.id}','${c.id}', this.dataset.nev)"
+                        data-nev="${escapeHtml(c.name)}">&times;</button>
+              </div>
+            </div>
           </div>
         </div>`
-        return vanEmail
-          ? `<a class="pn-item" style="display:block;text-decoration:none;color:inherit" href="mailto:${encodeURIComponent(c.email).replace(/%40/g,'@')}">${sorBelso}</a>`
-          : `<div class="pn-item" title="Ehhez a kapcsolattartóhoz nincs e-mail cím rögzítve">${sorBelso}</div>`
       }).join('') : '<div class="pn-empty">Nincs megnevezett kapcsolattartó. A cég nem válaszol levélre, ezért ez hiány, nem részletkérdés.</div>'}
 
     <div class="pn-section">Feladatok &middot; ${nyitott} nyitott${lezart ? `, ${lezart} lezárt` : ''}
@@ -21203,27 +21548,7 @@ async function openPartner(id) {
         </div>
       </div>
     </div>
-    ${d.cards.length ? d.cards.map(c => `<div class="pn-item${c.status === 'done' ? ' is-done' : ''}">
-        <div style="display:flex;gap:10px;align-items:flex-start">
-          <input type="checkbox" ${c.status === 'done' ? 'checked' : ''} title="Kész"
-                 data-elozo="${c.status}"
-                 style="margin-top:3px;width:17px;height:17px;flex:none;cursor:pointer"
-                 onchange="toggleTaskDone('${p.id}','${c.id}', this.checked, this.dataset.elozo)">
-          <div style="min-width:0;flex:1">
-            <div style="font-size:13px;line-height:1.4">${escapeHtml(c.title)}</div>
-            <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
-              <select class="input" style="width:120px;font-size:11.5px;padding:3px 6px"
-                      onchange="patchTask('${p.id}','${c.id}',{assignee:this.value})">
-                ${_felelosOpciok(c.assignee)}
-              </select>
-              <input type="date" class="input" style="width:135px;font-size:11.5px;padding:3px 6px"
-                     value="${c.due_date || ''}"
-                     onchange="patchTask('${p.id}','${c.id}',{due_date:this.value})">
-              <span class="pn-meta" style="margin:0">${escapeHtml(PN_STATUSZ_LABEL[c.status] || c.status)}</span>
-            </div>
-          </div>
-        </div>
-      </div>`).join('') : '<div class="pn-empty">Nincs ehhez a partnerhez kötött kártya.</div>'}
+    ${_pnFeladatokHtml(p, d.cards)}
 
     <div class="pn-section">Előzmény &middot; ${d.interactions.length}
       <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showMemoForm('${p.id}')">+ Memó</button>
@@ -21251,6 +21576,9 @@ async function openPartner(id) {
         <div class="pn-time-text">${escapeHtml(i.summary)}</div>
       </div>`).join('') : '<div class="pn-empty">Még nincs rögzített érintkezés.</div>'}
   `
+  // A belyegkepek a lap kirajzolasa UTAN toltodnek, tokennel. Nem varunk ra:
+  // a lap hasznalhato kepek nelkul is, es egy lassu kep ne tartsa fel a rajzolast.
+  pnCsatolmanyKepek()
 }
 
 /** Egy meglevo kartya mezoinek modositasa a partner-laprol. A kanban PUT
@@ -21301,10 +21629,207 @@ function toggleTaskDone(partnerId, cardId, kesz, renderStatus) {
   return patchTask(partnerId, cardId, { status: vissza })
 }
 
+/**
+ * A statusz-legordulo ES a pipa UGYANAZT a mezot irja, tehat a pipa
+ * allapot-megorzesebol (_pnDoneElott) a legordulonek is tapalnia kell. Ha valaki
+ * a legordulovel visz egy kartyat in_progress -> done utra, a terkep kulonben ures
+ * marad, es a pipa KESOBBI levetele vakon planned-re allit -- pont az a csendes
+ * allapot-veszites, amit a toggleTaskDone fenti kommentje mert eset alapjan ir le.
+ */
+function patchTaskStatus(partnerId, cardId, ujStatus, elozoStatus) {
+  if (ujStatus === 'done' && elozoStatus && elozoStatus !== 'done') {
+    _pnDoneElott.set(cardId, elozoStatus)
+  } else if (ujStatus !== 'done') {
+    _pnDoneElott.delete(cardId)
+  }
+  return patchTask(partnerId, cardId, { status: ujStatus })
+}
+
+/**
+ * A cim atirasa. Ket dolgot kell kulon kezelni, mert mindketto CSENDBEN rontana el
+ * a kartyat:
+ *
+ * 1. URES CIM: a kanban PUT elfogadna, es a kartya cim nelkul maradna a tablan.
+ *    Ilyenkor nem mentunk, hanem VISSZAALLITJUK a mezot az eredetire, es megmondjuk,
+ *    miert. A nema visszaallitas rosszabb lenne, mint a hibajelzes.
+ * 2. VALTOZATLAN SZOVEG (csak szokozok): az onchange akkor is tuzel, ha a felhasznalo
+ *    beleirt es visszatorolte. Egy ilyen mentes felesleges PUT, es a kartya
+ *    updated_at-jet is elorehuzza, ami a kanban-auditban mozgasnak latszik.
+ */
+/** Egy kapcsolattarto mezojenek mentese. David kerese, 2026-10-14 (Telegram 9720).
+ *  A vegpont a PUT /api/partners/<pid>/contacts/<cid>, es az ures sztringet
+ *  SZANDEKOS torlesnek veszi (NULL), hogy egy rossz telefonszamot ki is lehessen
+ *  urteni, ne csak atirni. A nev kivetel: azt a szerver 400-cal utasitja el. */
+async function patchContact(partnerId, contactId, mezok) {
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(partnerId)}/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mezok),
+    })
+    if (!r.ok) {
+      // A szerver hibaszovege beszedes (pl. "name cannot be empty"), ezert azt
+      // mutatjuk meg, nem csak a statuszkodot.
+      let reszlet = 'HTTP ' + r.status
+      try { const j = await r.json(); if (j && j.error) reszlet = j.error } catch { /* nem JSON */ }
+      throw new Error(reszlet)
+    }
+    await openPartner(partnerId)
+  } catch (e) {
+    alert('A kapcsolattartó módosítása nem sikerült: ' + String(e.message || e))
+    await openPartner(partnerId)
+  }
+}
+
+/** A nev kulon fuggvenyt kap, ugyanabbol az okbol, mint a feladat cime: ures
+ *  nevvel a sor azonosithatatlan lenne a lapon, a valtozatlan szoveg mentese
+ *  pedig felesleges iras. A szerver is 400-azza az ures nevet -- ez a ketto
+ *  egymast fedi, nem helyettesiti: itt a felhasznalo AZONNAL latja. */
+async function patchContactName(partnerId, contactId, input) {
+  const eredeti = input.dataset.eredeti || ''
+  const nev = (input.value || '').trim()
+  if (!nev) {
+    input.value = eredeti
+    alert('Név nélkül nem mentem el a kapcsolattartót. A régi név visszaállt.')
+    return
+  }
+  if (nev === eredeti.trim()) { input.value = eredeti; return }
+  return patchContact(partnerId, contactId, { name: nev })
+}
+
+async function patchTaskTitle(partnerId, cardId, input) {
+  const eredeti = input.dataset.eredeti || ''
+  const cim = (input.value || '').trim()
+  if (!cim) {
+    input.value = eredeti
+    alert('Cím nélkül nem mentem el a feladatot. A régi cím visszaállt.')
+    return
+  }
+  if (cim === eredeti.trim()) { input.value = eredeti; return }
+  return patchTask(partnerId, cardId, { title: cim })
+}
+
+/**
+ * Feladat vagy lepes torlese a partner-laprol. David kerese, 2026-10-14
+ * (Telegram 9734). HAROM dolog vedi, es mindharom szandekos:
+ *
+ * 1. MEGERESITES a cim idezesevel. Egy "biztos?" kerdes, amiben nem latszik,
+ *    MIT torol, ugyanolyan vak, mint ha nem is kerdeznenk.
+ * 2. A TORLES VEGLEGES, es ezt a szoveg ki is mondja. A kanban DELETE nem
+ *    archival, hanem torol.
+ * 3. A LEPESEKKEL rendelkezo feladatot a SZERVER utasitja vissza (409), es a
+ *    hibaszoveg megmondja a sorrendet. Itt a kliens NEM dont: a lepesek szamat
+ *    a szerver meri, nem a lap, mert a lap allapota lehet elavult.
+ */
+async function deleteTask(partnerId, cardId, cim, lepes) {
+  const mi = lepes ? 'lépést' : 'feladatot'
+  if (!confirm(`Véglegesen törlöd ezt a ${mi}?\n\n${cim}\n\nEz nem visszavonható.`)) return
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(partnerId)}/cards/${encodeURIComponent(cardId)}`, { method: 'DELETE' })
+    if (!r.ok) {
+      let reszlet = 'HTTP ' + r.status
+      try { const j = await r.json(); if (j && j.error) reszlet = j.error } catch { /* nem JSON */ }
+      throw new Error(reszlet)
+    }
+    await openPartner(partnerId)
+  } catch (e) {
+    alert('A törlés nem sikerült: ' + String(e.message || e))
+    await openPartner(partnerId)
+  }
+}
+
+/** Kapcsolattarto torlese. A "nem aktiv" allapot MAS dolog, es a megerositesben
+ *  ki is mondjuk: ha a szemely csak elment a cegtol, a nyoma ertek, es akkor a
+ *  legordulo a helyes eszkoz, nem a torles. */
+async function deleteContact(partnerId, contactId, nev) {
+  if (!confirm(`Véglegesen törlöd ezt a kapcsolattartót?\n\n${nev}\n\nEz nem visszavonható. Ha csak már nem dolgozik ott, a "nem aktív" állapot a helyes választás.`)) return
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(partnerId)}/contacts/${encodeURIComponent(contactId)}`, { method: 'DELETE' })
+    if (!r.ok) {
+      let reszlet = 'HTTP ' + r.status
+      try { const j = await r.json(); if (j && j.error) reszlet = j.error } catch { /* nem JSON */ }
+      throw new Error(reszlet)
+    }
+    await openPartner(partnerId)
+  } catch (e) {
+    alert('A törlés nem sikerült: ' + String(e.message || e))
+    await openPartner(partnerId)
+  }
+}
+
+/** Lepes-urlap megnyitasa/zarasa egy KONKRET feladaton. Azert kell az id a
+ *  DOM-azonositoba, mert a lapon tobb feladat van, es egy kozos urlap a rossz
+ *  szulo ala tenne a lepest. */
+function showLepesForm(cardId) {
+  const f = document.getElementById('pnLepesForm-' + cardId)
+  if (!f) return
+  f.hidden = false
+  const d = document.getElementById('pnLepesDue-' + cardId)
+  if (d && !d.value) d.value = _maiDatum()
+  document.getElementById('pnLepesTitle-' + cardId)?.focus()
+}
+
+function hideLepesForm(cardId) {
+  const f = document.getElementById('pnLepesForm-' + cardId)
+  if (f) f.hidden = true
+  const i = document.getElementById('pnLepesTitle-' + cardId)
+  if (i) i.value = ''
+  const d = document.getElementById('pnLepesDue-' + cardId)
+  if (d) d.value = ''
+  const m = document.getElementById('pnLepesMsg-' + cardId)
+  if (m) m.textContent = ''
+}
+
+/** Uj lepes mentese. Ugyanaz a vegpont, mint a feladatnal, csak `parent_id`-vel:
+ *  a lepes RENDES kanban-kartya, tehat a tablan is megjelenik, es sajat
+ *  felelose/hataridoje lehet. A szerver ellenorzi, hogy a szulo ugyanehhez a
+ *  partnerhez tartozik-e, es hogy nem lepes-e maga. */
+async function saveLepes(partnerId, cardId) {
+  const cim = (document.getElementById('pnLepesTitle-' + cardId)?.value || '').trim()
+  const msg = document.getElementById('pnLepesMsg-' + cardId)
+  if (!cim) { if (msg) msg.textContent = 'Cím nélkül nem mentek lépést.'; return }
+  const due = document.getElementById('pnLepesDue-' + cardId)?.value || ''
+  const fel = document.getElementById('pnLepesAssignee-' + cardId)?.value || ''
+  if (msg) msg.textContent = 'Mentés...'
+  const payload = { title: cim, status: 'planned', parent_id: cardId }
+  if (due) payload.due_date = due
+  if (fel) payload.assignee = fel
+  try {
+    const r = await fetch(`/api/partners/${encodeURIComponent(partnerId)}/cards`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      let reszlet = 'HTTP ' + r.status
+      try { const j = await r.json(); if (j && j.error) reszlet = j.error } catch { /* nem JSON */ }
+      throw new Error(reszlet)
+    }
+    await openPartner(partnerId)
+  } catch (e) {
+    // A begepelt szoveg marad, hogy ne kelljen ujra beirni.
+    if (msg) msg.textContent = 'Nem sikerült menteni (' + String(e.message || e) + '). A szöveg megmaradt.'
+  }
+}
+
+/** Mai datum YYYY-MM-DD alakban, HELYI ido szerint.
+ *  NEM toISOString(): az UTC-t ad, es este 22 ora utan (CEST) mar a KOVETKEZO napot
+ *  irna be. A date-input ugyanezt a helyi alakot varja. */
+function _maiDatum() {
+  const d = new Date()
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 function showTaskForm(id) {
   const f = document.getElementById('pnTaskForm')
   if (!f) return
   f.hidden = false
+  // David kerese, 2026-10-22 14:10: a datum alapbol a letrehozas napja legyen,
+  // de maradjon atirhato. Ezert csak akkor toltjuk ki, ha ures -- ha valaki mar
+  // beirt egy masik datumot, azt nem irjuk felul.
+  const d = document.getElementById('pnTaskDue')
+  if (d && !d.value) d.value = _maiDatum()
   document.getElementById('pnTaskTitle')?.focus()
 }
 
@@ -21313,6 +21838,8 @@ function hideTaskForm() {
   if (f) f.hidden = true
   const i = document.getElementById('pnTaskTitle')
   if (i) i.value = ''
+  const d = document.getElementById('pnTaskDue')
+  if (d) d.value = ''
   const m = document.getElementById('pnTaskMsg')
   if (m) m.textContent = ''
 }
@@ -21339,6 +21866,91 @@ async function saveTask(id) {
   } catch (e) {
     // A bukott mentes NEM nema, es a begepelt cim bent marad.
     if (msg) msg.textContent = 'Nem sikerült menteni (' + String(e.message || e) + '). A szöveg megmaradt.'
+  }
+}
+
+/** Fajl csatolasa egy feladathoz. Multipart POST, ugyanaz az ut, mint az otlet-dobozban.
+ *
+ *  A FELTOLTES UTAN TELJES UJRARAJZOLAS megy (openPartner), nem reszleges DOM-foltozas:
+ *  igy a lista biztosan azt mutatja, ami a szerveren VAN, nem azt, amit a bongeszo hitt. */
+/** Csatolmany megnyitasa UJ FULON, a Bearer tokennel.
+ *
+ *  A fetch a globalis burkolon megy at (az teszi ra a tokent), az eredmeny Blob,
+ *  abbol objectURL. Egy sima <a href> ezt nem tudja, mert a navigacio nem viszi a
+ *  fejlecet, es az API 401-et ad -- pontosan ez tortent 2026-10-22-en Davidnal. */
+async function pnFajlMegnyit(ev, attachmentId, nev) {
+  if (ev) ev.preventDefault()
+  try {
+    const r = await fetch(`/api/kanban/attachments/${encodeURIComponent(attachmentId)}/download`)
+    if (!r.ok) {
+      let reszlet = 'HTTP ' + r.status
+      try { const j = await r.json(); if (j && j.error) reszlet = j.error } catch { /* nem JSON */ }
+      throw new Error(reszlet)
+    }
+    const url = URL.createObjectURL(await r.blob())
+    const w = window.open(url, '_blank')
+    // Ha a bongeszo blokkolja a felugro ablakot, legyen letoltes helyette -- a
+    // nema kudarc rosszabb, mint egy masik viselkedes.
+    if (!w) {
+      const a = document.createElement('a')
+      a.href = url; a.download = nev || 'csatolmany'
+      document.body.appendChild(a); a.click(); a.remove()
+    }
+    // Az objectURL a lap eletehez kotodik; egy perc utan felszabaditjuk.
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch (e) {
+    alert('A csatolmányt nem sikerült megnyitni (' + String(e.message || e) + ').')
+  }
+}
+
+/** A belyegkepeket is tokennel kell lehuzni, ugyanabbol az okbol.
+ *  A partner-lap ujrarajzolasa utan fut le, es csak a meg ures <img>-eket tolti. */
+async function pnCsatolmanyKepek() {
+  const kepek = document.querySelectorAll('img.pn-csatolmany-kep[data-att]:not([src])')
+  for (const img of kepek) {
+    try {
+      const r = await fetch(`/api/kanban/attachments/${encodeURIComponent(img.dataset.att)}/download`)
+      if (!r.ok) continue
+      img.src = URL.createObjectURL(await r.blob())
+    } catch { /* egy hianyzo belyegkep nem allithatja meg a lapot */ }
+  }
+}
+
+async function pnFajlFeltolt(partnerId, cardId, input) {
+  const fajl = input && input.files && input.files[0]
+  if (!fajl) return
+  // A NEV MEGTARTASA: az input ertekét a feltoltes utan uritjuk, kulonben ugyanannak
+  // a fajlnak az ujboli kivalasztasa nem valtana change-eventet.
+  const nev = fajl.name
+  input.value = ''
+  if (fajl.size > 20 * 1024 * 1024) {
+    alert(`A fájl ${(fajl.size / 1024 / 1024).toFixed(1)} MB, a határ 20 MB. Ezt nem töltöm fel: ${nev}`)
+    return
+  }
+  const fd = new FormData()
+  fd.append('file', fajl, nev)
+  try {
+    const r = await fetch(`/api/kanban/${encodeURIComponent(cardId)}/attachments`, { method: 'POST', body: fd })
+    if (!r.ok) {
+      let reszlet = 'HTTP ' + r.status
+      try { const j = await r.json(); if (j && j.error) reszlet = j.error } catch { /* nem JSON */ }
+      throw new Error(reszlet)
+    }
+    await openPartner(partnerId)
+  } catch (e) {
+    // A BUKAS NEM NEMA: enelkul a felhasznalo azt hinne, hogy felment.
+    alert(`A fájlt nem sikerült feltölteni (${String(e.message || e)}): ${nev}`)
+  }
+}
+
+async function pnFajlTorles(partnerId, attachmentId, nev) {
+  if (!confirm(`Törlöd ezt a csatolmányt? ${nev || ''}`)) return
+  try {
+    const r = await fetch(`/api/kanban/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    await openPartner(partnerId)
+  } catch (e) {
+    alert('A csatolmányt nem sikerült törölni (' + String(e.message || e) + ').')
   }
 }
 

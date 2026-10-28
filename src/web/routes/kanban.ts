@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { extname, join, relative, resolve, sep } from 'node:path'
 import {
   listKanbanCards, kanbanAssigneeExists, createKanbanCard, writeKanbanCard, KANBAN_WRITABLE_FIELDS, KANBAN_CREATE_FIELDS,
   deleteKanbanCard, moveKanbanCard, archiveKanbanCard, unarchiveKanbanCard,
@@ -22,10 +23,11 @@ import {
   getDbFileSizeMb,
   getTokenPruneLag,
   getStuckKanbanCards,
+  listKanbanAttachments, getKanbanAttachment, addKanbanAttachment, deleteKanbanAttachment,
   type TokenPruneLag,
 } from '../../db.js'
 import { normalizeKanbanRefs } from '../kanban-ref-normalize.js'
-import { OWNER_NAME, BOT_NAME, MAIN_AGENT_ID, STORE_DIR, WEB_HOST, WEB_PORT, KANBAN_LABEL_COLORS, KANBAN_LABEL_COLORS_REJECTED, KANBAN_LABEL_COLORS_OVERFLOW, DB_FILENAME } from '../../config.js'
+import { OWNER_NAME, BOT_NAME, MAIN_AGENT_ID, STORE_DIR, WEB_HOST, WEB_PORT, KANBAN_LABEL_COLORS, KANBAN_LABEL_COLORS_REJECTED, KANBAN_LABEL_COLORS_OVERFLOW, DB_FILENAME, PROJECT_ROOT } from '../../config.js'
 import { listAgentNames, readAgentDisplayName } from '../agent-config.js'
 import { nicknameFor } from '../team-nicknames.js'
 import { isAgentRunning } from '../agent-process.js'
@@ -35,6 +37,11 @@ import { getCardTokenUsage } from '../token-usage.js'
 import { logger } from '../../logger.js'
 import { MAX_LABEL_PALETTE_ENTRIES, resolveLabelColor } from '../../css-color.js'
 import { readBody, json, jsonMaybeGzip, methodNotAllowed } from '../http-helpers.js'
+import { parseMultipart } from '../multipart.js'
+import {
+  CSATOLMANY_GYOKER, CSATOLMANY_MAX_BYTE, biztonsagosFajlnev, csatolmanyAbszolut,
+  torolKartyaCsatolmanyFajljait,
+} from '../kanban-csatolmany.js'
 import { getEffectiveSettingValue } from '../../settings-store.js'
 import type { RouteContext } from './types.js'
 
@@ -643,10 +650,157 @@ export function parseClaimTtl(raw: unknown): number | null {
   if (typeof n !== 'number' || !Number.isInteger(n)) return null
   if (n < KANBAN_CLAIM_MIN_TTL_SEC || n > KANBAN_CLAIM_MAX_TTL_SEC) return null
   return n
+
+// --- Feladat-csatolmanyok (CRM) -----------------------------------------
+// David kerese, 2026-10-22 14:10 (Telegram 10558): "Fajlt lehessen feltolteni a
+// feladatoz, dokumentum, kis kep". A tarolasi es letoltesi ut az idea_attachments
+// mar mukodo mintaja, hogy ne szulessen masodik, maskepp viselkedo megoldas.
+// A tarolo gyokere, a biztonsagos nev, az utvonal-ellenorzes es a fajl-takaritas a
+// kozos modulban all (src/web/kanban-csatolmany.ts), mert a kartya torlese KET helyrol
+// indulhat: innen es a partner-laprol.
+// A kiterjesztes ES a bejelentett MIME-nak is egyeznie kell: a puszta kiterjesztes
+// a feltolto szava, a MIME a bongeszoe, es a ketto egyutt szukebb, mint barmelyik
+// kulon. "application/octet-stream" ott all, ahol a bongeszok tenyleg ezt kuldik.
+const CSATOLMANY_TIPUSOK: Record<string, Set<string>> = {
+  '.pdf': new Set(['application/pdf']),
+  '.png': new Set(['image/png']),
+  '.jpg': new Set(['image/jpeg']),
+  '.jpeg': new Set(['image/jpeg']),
+  '.gif': new Set(['image/gif']),
+  '.webp': new Set(['image/webp']),
+  '.heic': new Set(['image/heic', 'application/octet-stream']),
+  '.txt': new Set(['text/plain']),
+  '.md': new Set(['text/markdown', 'text/plain', 'application/octet-stream']),
+  '.csv': new Set(['text/csv', 'application/csv', 'text/plain', 'application/vnd.ms-excel']),
+  '.docx': new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/octet-stream']),
+  '.xlsx': new Set(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/octet-stream']),
+  '.pptx': new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/octet-stream']),
+}
+
+function nyilvanosCsatolmany(sor: import('../../db.js').KanbanAttachmentRow) {
+  const { stored_path: _ut, ...tobbi } = sor
+  return tobbi
 }
 
 export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   const { req, res, path, method, url } = ctx
+
+  // --- Feladat-csatolmanyok -------------------------------------------------
+  // A SORREND NEM MINDEGY: ezek ELOBB allnak, mint a /api/kanban/:id minta,
+  // kulonben az "attachments" szo kartya-azonositonak latszana.
+  const letoltes = path.match(/^\/api\/kanban\/attachments\/([^/]+)\/download$/)
+  if (letoltes && method === 'GET') {
+    const sor = getKanbanAttachment(decodeURIComponent(letoltes[1]))
+    if (!sor) { json(res, { error: 'csatolmany nem talalhato' }, 404); return true }
+    const fajl = csatolmanyAbszolut(sor.stored_path)
+    if (!fajl) { json(res, { error: 'ervenytelen csatolmany utvonal' }, 400); return true }
+    if (!existsSync(fajl)) { json(res, { error: 'a csatolmany fajlja nem talalhato' }, 404); return true }
+    // `inline`, hogy a kep es a PDF a bongeszoben megnyiljon; a filename* a
+    // magyar ekezetes nevet viszi at helyesen.
+    res.writeHead(200, {
+      'Content-Type': sor.mime,
+      'Content-Disposition': `inline; filename="${biztonsagosFajlnev(sor.filename).replace(/"/g, '_')}"; filename*=UTF-8''${encodeURIComponent(sor.filename)}`,
+      'Cache-Control': 'private, no-store',
+    })
+    createReadStream(fajl).pipe(res)
+    return true
+  }
+
+  const csatolmanyTorles = path.match(/^\/api\/kanban\/attachments\/([^/]+)$/)
+  if (csatolmanyTorles && method === 'DELETE') {
+    const id = decodeURIComponent(csatolmanyTorles[1])
+    const sor = getKanbanAttachment(id)
+    if (!sor) { json(res, { error: 'csatolmany nem talalhato' }, 404); return true }
+    const fajl = csatolmanyAbszolut(sor.stored_path)
+    if (fajl) {
+      try { unlinkSync(fajl) } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logger.warn({ err, attachmentId: id }, 'kanban csatolmany torlese nem sikerult')
+        }
+      }
+    } else {
+      // A sort ilyenkor is toroljuk, a FAJLT viszont nem: egy gyokeren kivulre
+      // mutato utvonal torlese tobbet kockaztat, mint amennyit megold.
+      logger.warn({ attachmentId: id, storedPath: sor.stored_path }, 'csatolmany a tarolo gyokeren kivul, fajl nem torolve')
+    }
+    deleteKanbanAttachment(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  const csatolmanyok = path.match(/^\/api\/kanban\/([^/]+)\/attachments$/)
+  if (csatolmanyok && method === 'GET') {
+    const cardId = decodeURIComponent(csatolmanyok[1])
+    if (!getKanbanCard(cardId)) { json(res, { error: 'card not found' }, 404); return true }
+    json(res, { attachments: listKanbanAttachments(cardId).map(nyilvanosCsatolmany) })
+    return true
+  }
+
+  if (csatolmanyok && method === 'POST') {
+    const cardId = decodeURIComponent(csatolmanyok[1])
+    if (!getKanbanCard(cardId)) { json(res, { error: 'card not found' }, 404); return true }
+    const bejelentett = Number(req.headers['content-length'] || 0)
+    if (bejelentett > CSATOLMANY_MAX_BYTE + 1024 * 1024) {
+      json(res, { error: 'a fajl legfeljebb 20 MB lehet' }, 413); return true
+    }
+    let test: Buffer
+    try {
+      test = await readBody(req, { maxBytes: CSATOLMANY_MAX_BYTE + 1024 * 1024 })
+    } catch {
+      json(res, { error: 'a fajl legfeljebb 20 MB lehet' }, 413); return true
+    }
+    const { file, fields } = parseMultipart(test, req.headers['content-type'] || '')
+    if (!file) { json(res, { error: 'nincs feltoltott fajl' }, 400); return true }
+    if (file.data.length > CSATOLMANY_MAX_BYTE) { json(res, { error: 'a fajl legfeljebb 20 MB lehet' }, 413); return true }
+    const kiterjesztes = extname(file.name).toLowerCase()
+    const mime = file.mime.toLowerCase().split(';', 1)[0].trim()
+    const engedett = CSATOLMANY_TIPUSOK[kiterjesztes]
+    if (!engedett?.has(mime)) {
+      json(res, {
+        error: 'ez a fajltipus nem tolheto fel',
+        kiterjesztes,
+        mime,
+        engedett: Object.keys(CSATOLMANY_TIPUSOK),
+      }, 415)
+      return true
+    }
+    const id = randomUUID().slice(0, 8)
+    const nev = file.name.replace(/^.*[\\/]/, '').slice(0, 255) || 'csatolmany'
+    const konyvtar = resolve(CSATOLMANY_GYOKER, biztonsagosFajlnev(cardId))
+    const konyvtarRel = relative(CSATOLMANY_GYOKER, konyvtar)
+    if (!konyvtarRel || konyvtarRel.startsWith(`..${sep}`)) {
+      json(res, { error: 'ervenytelen kartya-azonosito' }, 400); return true
+    }
+    mkdirSync(konyvtar, { recursive: true })
+    const fajlUt = resolve(konyvtar, `${id}-${biztonsagosFajlnev(nev)}`)
+    try {
+      writeFileSync(fajlUt, file.data)
+    } catch (err) {
+      logger.error({ err, cardId }, 'csatolmany irasa nem sikerult')
+      json(res, { error: 'a fajlt nem sikerult elmenteni' }, 500); return true
+    }
+    const sor: import('../../db.js').KanbanAttachmentRow = {
+      id,
+      card_id: cardId,
+      filename: nev,
+      stored_path: relative(PROJECT_ROOT, fajlUt),
+      mime,
+      size: file.data.length,
+      uploaded_by: ctx.auth?.user ?? (fields.uploaded_by || null),
+      created_at: Math.floor(Date.now() / 1000),
+    }
+    try {
+      addKanbanAttachment(sor)
+    } catch (err) {
+      // A SORREND MIATT KELL: a fajl mar a lemezen van, a sor viszont nincs meg.
+      // Ha itt nem takaritunk, egy arva fajl marad, amire semmi nem mutat.
+      try { unlinkSync(fajlUt) } catch { /* legjobb szandek */ }
+      throw err
+    }
+    json(res, nyilvanosCsatolmany(sor))
+    return true
+  }
+
 
   if (path === '/api/kanban' && method === 'GET') {
     // includeArchived is honoured or REFUSED -- never silently dropped. Ignoring it was
@@ -1158,6 +1312,9 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
   if (kanbanCardMatch && method === 'DELETE') {
     const id = decodeURIComponent(kanbanCardMatch[1])
     revertIdeaFromKanban(id)
+    // A FAJLOK a sorok ELOTT mennek: a deleteKanbanCard tranzakcioja torli a
+    // csatolmany-sorokat, es utana mar nem tudnank, melyik fajl tartozott ide.
+    torolKartyaCsatolmanyFajljait(id)
     if (deleteKanbanCard(id)) { json(res, { ok: true }); return true }
     json(res, { error: 'Kártya nem található' }, 404)
     return true
