@@ -54,6 +54,39 @@ describe('classifyDelivery', () => {
     expect(classifyDelivery(sent, [head, tail])).toBe('split')
   })
 
+  it('intact-normalised: the ONLY difference is the measured dropped semicolon', () => {
+    // Measured 2026-10-03 and re-measured 2026-10-28 on sam's
+    // unas-sikertelen-fizetes-ertesites: 199 consecutive runs read 'spliced'
+    // because the terminal drops ONE character. Everything else arrived whole.
+    const sent = [
+      '<scheduled-task source="scheduled-task:x" body-file="/tmp/a.md" body-sha256="deadbeef" body-chars="42">',
+      'A feladat teljes szovege a body-file fajlban van. Olvasd be TELJESEN (Read), es azt hajtsd vegre.',
+      'A fajl ELSO sora egy <!-- scheduled-run ... --> fejlec; a body-chars (Unicode-karakter, mint a Python len())',
+      'es a body-sha256 (UTF-8) a fejlec UTANI szovegre vonatkozik.',
+      '</scheduled-task>',
+    ].join('\n')
+    const got = sent.replace('fejlec; a body-chars', 'fejlec a body-chars')
+    expect(got).not.toBe(sent)
+    expect(classifyDelivery(sent, [got])).toBe('intact-normalised')
+  })
+
+  it('spliced: the benign fixup must NOT mask any other damage', () => {
+    // The safety property of BENIGN_FIXUPS: byte-equality is still required
+    // after the substitution. Here the semicolon is dropped AND a sentence is
+    // cut, so the verdict must stay 'spliced'.
+    const sent = [
+      '<scheduled-task source="scheduled-task:x" body-file="/tmp/a.md" body-sha256="deadbeef" body-chars="42">',
+      'A feladat teljes szovege a body-file fajlban van. Olvasd be TELJESEN (Read), es azt hajtsd vegre.',
+      'A fajl ELSO sora egy <!-- scheduled-run ... --> fejlec; a body-chars (Unicode-karakter, mint a Python len())',
+      'es a body-sha256 (UTF-8) a fejlec UTANI szovegre vonatkozik.',
+      '</scheduled-task>',
+    ].join('\n')
+    const got = sent
+      .replace('fejlec; a body-chars', 'fejlec a body-chars')
+      .replace('Olvasd be TELJESEN (Read), es azt hajtsd vegre.', '')
+    expect(classifyDelivery(sent, [got])).toBe('spliced')
+  })
+
   it('spliced: head and tail in one prompt, middle damaged (measured C-u shape)', () => {
     const damaged = sent.slice(0, 900) + sent.slice(913)
     expect(classifyDelivery(sent, [damaged])).toBe('spliced')

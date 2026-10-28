@@ -51,6 +51,13 @@ export type DeliveryVerdict =
   | 'split'
   // Head and tail are in one prompt, but the text between them differs.
   | 'spliced'
+  // Head and tail are in one prompt, and the ONLY remaining difference is a
+  // measured, benign transformation the terminal performs on every delivery to
+  // this target (see BENIGN_FIXUPS). Kept DISTINCT from 'intact' on purpose: a
+  // benign difference is still a difference, and collapsing it into 'intact'
+  // would hide the fact that the text is not arriving byte-exact. Marci
+  // approved this verdict on 2026-10-28 (Telegram 10927) for one measured case.
+  | 'intact-normalised'
   // The TUI wrapped the prompt as pasted content (<pasted_content>): the text
   // is whole, but the model is told pasted text may not be the user's own --
   // the same self-defeating framing that once made agents refuse their own
@@ -75,6 +82,40 @@ function anchorLen(text: string): number {
 }
 
 const PASTE_WRAP_RX = /<pasted_content\b/
+
+// MEASURED, BENIGN TRANSFORMATIONS, and this list may only grow on measurement.
+//
+// Each entry rewrites the RECEIVED text back towards what was typed. A delivery
+// is reclassified ONLY if, after applying them, it matches the typed text
+// EXACTLY -- so an entry can never mask damage elsewhere in the prompt. That is
+// the whole safety property: the list does not loosen the comparison, it names
+// one known substitution and still demands byte-equality for everything else.
+//
+// WHY THIS EXISTS (measured 2026-10-03, re-measured 2026-10-28): sam's
+// `unas-sikertelen-fizetes-ertesites` task recorded `spliced` on 199
+// consecutive runs, and the entire difference was ONE character: the template
+// writes `fejlec; a body-chars`, the transcript records `fejlec a body-chars`.
+// The body-file path, the sha256 and the char count all arrived intact, so the
+// round could verify and run -- the delivery was sound. But a target that is
+// permanently red cannot show a REAL splice: it would step from 1 to 2, which
+// is far harder to notice than 0 to 1. The watchdog was effectively disarmed on
+// exactly the task that tells David about failed customer card payments.
+//
+// Marci chose this route on 2026-10-28 (Telegram 10927) over fixing the
+// character loss first, so the signal regains its meaning now; the root cause
+// (why only this one task) stays open and unmeasured, on its own card.
+//
+// NOT AN OPTION, and named here so it does not creep in later: silencing the
+// verdict for this target. That leads to the same blindness, invisibly.
+const BENIGN_FIXUPS: readonly { readonly from: RegExp; readonly to: string }[] = [
+  { from: /<!-- scheduled-run \.\.\. --> fejlec a body-chars/g, to: '<!-- scheduled-run ... --> fejlec; a body-chars' },
+]
+
+function applyBenignFixups(text: string): string {
+  let out = text
+  for (const { from, to } of BENIGN_FIXUPS) out = out.replace(from, to)
+  return out
+}
 
 /**
  * One prompt the session recorded: typed as a turn of its own, or queued into a
@@ -119,7 +160,11 @@ export function classifyDelivery(sent: string, received: ReadonlyArray<string | 
     if (headOnly) return 'split'
     if (got === want) return queued ? 'intact-queued' : 'intact'
     if (!hasHead) return 'head-lost'
-    return PASTE_WRAP_RX.test(got) ? 'paste-wrapped' : 'spliced'
+    if (PASTE_WRAP_RX.test(got)) return 'paste-wrapped'
+    // Last check before calling it damaged: is the ONLY difference a measured,
+    // benign transformation? Byte-equality is still required afterwards.
+    if (applyBenignFixups(got) === want) return 'intact-normalised'
+    return 'spliced'
   }
   return headOnly ? 'tail-lost' : null
 }
