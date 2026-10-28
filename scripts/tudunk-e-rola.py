@@ -23,6 +23,40 @@ def ekezettelen(s):
     return ''.join(c for c in unicodedata.normalize('NFD', s.lower())
                    if unicodedata.category(c) != 'Mn')
 
+
+# CELZOTT KIZARAS A ZAJOS KULCSSZAVAKRA (2026-10-19, merve).
+#
+# A keresés szandekosan RESZKARAKTERES, mert a magyar ragozott es osszetett alakokat igy
+# talalja meg (keszlet-riportbol, auchanos, escape-elt). Van viszont nehany rovid kulcsszo,
+# amelyik egy HOSSZABB, mas jelentesu szotobe belefut, es ott a reszkarakteres illesztes
+# mert hamis talalatot ad.
+#
+# AMIT KIPROBALTUNK ES ELVETETTUNK: egy ALTALANOS szohatar-szabaly. Az valodi talalatokat
+# veszit a magyar osszetett es kotojeles alakokon. Merve 2026-10-08: auchan 43-bol 7,
+# escape 47-bol 13 maradt volna.
+#
+# AMI EHELYETT VAN: kulcsszavankent nevesitett, kizarando SZOTOVEK. A kizaras CSAK arra az
+# egy kulcsszora hat, a tobbi valtozatlanul reszkarakteres marad. Egy ragozott alak (demok,
+# demoval, demo-verzio) tovabbra is talalat, mert a kizaras nem szohatart ker, hanem egy
+# konkret, mas jelentesu szotovet vesz ki a szenakazalbol.
+#
+# MERT ESET: a 'demo' 10 talalatbol 6-ot a 'demonstr-' szotobol kapott (demonstrated,
+# demonstracio, DEMONSTR). A javitas utan 4 talalat, es a ket kontroll-kulcsszo valtozatlan.
+KIZARAS = {
+    'demo': ('demonstr',),
+}
+
+
+def illeszkedik(n, kifejezesek):
+    """Minden kifejezes szerepel-e a szovegben, a zajos kulcsszavak kizarasaival."""
+    for k in kifejezesek:
+        hay = n
+        for szoto in KIZARAS.get(k, ()):
+            hay = hay.replace(szoto, ' ')
+        if k not in hay:
+            return False
+    return True
+
 def talalatok_fajlokban(kifejezesek):
     ki = []
     for cimke, gyoker in HELYEK:
@@ -39,7 +73,7 @@ def talalatok_fajlokban(kifejezesek):
                     continue
                 for i, sor in enumerate(sorok, 1):
                     n = ekezettelen(sor)
-                    if all(k in n for k in kifejezesek):
+                    if illeszkedik(n, kifejezesek):
                         ki.append((cimke, os.path.relpath(ut, os.path.expanduser('~')), i, sor.strip()[:160]))
     return ki
 
@@ -53,13 +87,13 @@ def talalatok_kartyakon(kifejezesek):
     for cid, cim, leiras in c.fetchall():
         for mezo, szoveg in (('cim', cim), ('leiras', leiras)):
             n = ekezettelen(szoveg)
-            if all(k in n for k in kifejezesek):
+            if illeszkedik(n, kifejezesek):
                 ki.append(('kartya-' + mezo, cid[:8], 0, szoveg.strip()[:160]))
                 break
     c.execute("""SELECT card_id,content FROM kanban_comments ORDER BY created_at DESC LIMIT 400""")
     for cid, tartalom in c.fetchall():
         n = ekezettelen(tartalom)
-        if all(k in n for k in kifejezesek):
+        if illeszkedik(n, kifejezesek):
             ki.append(('kartya-komment', cid[:8], 0, tartalom.strip().replace('\n', ' ')[:160]))
     return ki
 
