@@ -46,6 +46,61 @@ celra (server.ts:323, csoportos bot-megszolitas felismerese) -- de a bejovo
 ebben a korben -- Pedro kulon valtoztatasnak akarja, sema-modositas, elobb
 lassa az adatot elesben.
 
+## FIGYELEM: A KESZLET ELAVULT AZ ELO FAJLHOZ KEPEST (mert 2026-10-12, es ez a recept HIBAJA volt)
+
+Amikor ma a negyedik patch-et irtam, lemertem a harom fajlt, es a kep ez volt:
+elo `server.ts` 40205 bajt, `server.ts.patched` 40661, `server.ts.orig` 40358.
+**Az ELO fajl KET olyan Marveen-patch-et tartalmazott, ami a keszletben nem volt benne**
+(`elsokor922-d4`: a /help es /status kezelok athelyezve a command hookba; `cmd920-evid`:
+inbound-evidence naplozas). Vagyis a lenti "egyszeru fajl-visszamasolas" recept
+**CSENDBEN VISSZAVONTA VOLNA azt a ket elo javitast.**
+
+A `plugin-patch-orszem` ettol nem vedett meg, es ez nem az o hibaja: az `ellenorzes.py`
+a replyMeta-patch JELENLETET meri, nem a fajl teljes azonossagat. Egy szuk orszem
+helyes, csak tudni kell, mit NEM mer.
+
+**SZABALY, AMI EBBOL KOVETKEZIK: valahanyszor egy uj patch kerul az ELO plugin-fajlba,
+ugyanabban a korben regeneralni kell a keszletet is:**
+```bash
+P=~/.claude/plugins/cache/claude-plugins-official/telegram/0.0.7
+cp "$P/server.ts" patches/telegram-plugin/server.ts.patched
+diff -u patches/telegram-plugin/server.ts.orig patches/telegram-plugin/server.ts.patched \
+  > patches/telegram-plugin/server.ts.patch
+```
+Es POZITIV KONTROLL utana, mert egy diff lehet szintaktikailag jo es tartalmilag hibas:
+az `orig`-ra alkalmazva BAJTRA a `patched` fajlt kell adnia (`patch` + `cmp`).
+A 2026-10-12-i regeneralas igy tortent, es a kontroll atment. A regi, elavult peldany
+`server.ts.patched.elavult-20261012` neven megmaradt, hogy a ket elveszett patch
+visszakeresheto legyen, ha kell.
+
+## NEGYEDIK PATCH: `permleak1012` -- a jovahagyas-prompt nem megy mindenkinek
+
+**A hiba, ket mert esettel:** a vendor a `permission_request` notificationt
+`for (const chat_id of access.allowFrom)` ciklusban MINDEN parositott chatre elkuldi.
+Nalunk minden agens allowFrom-jaban 3-5 kollega van, tehat egy sub-agens Bash-promptja
+mindegyikukhoz megerkezik. 2026-08-03-an David kapta meg Sam szkriptjenek promptjat
+(ket Deny-t nyomott ra), 2026-09-11-en Abel Max hat kutato-szalabol. Egy ilyen prompt
+utvonalat, parancsot vagy parameter-erteket is tartalmazhat.
+
+**A javitas:** ha a `/home/pdb/marveen/store/permission-prompt-chat.txt` EGY chat_id-t
+tartalmaz, a prompt CSAK oda megy. A fajl ma a 8668856531-et (Marci, a technikai
+tulajdonos) tartalmazza. Ha a fajl hianyzik vagy ures, a vendor viselkedes valtozatlan,
+tehat egy friss telepitesen nincs regresszio.
+
+**KET DONTES A JAVITASBAN, es mindketto szandekos:**
+1. **Nem az `access.json`-ba kerult a beallitas**, hanem egy sajat fajlba a repoban. Az
+   `access.json` szerkesztese parositasi/hozzaferesi muvelet, es a plugin sajat
+   instrukcioja tiltja, hogy csatorna-uzenet alapjan hozzanyuljunk. Ez a valtoztatas
+   ettol fuggetlen: NEM ad hozzaferest senkinek, csak szukiti, ki kap promptot.
+2. **Ha a konfiguralt chat NINCS az adott csatorna allowFrom-jaban, a kod a vendor
+   broadcastra esik vissza, es stderr-re ir.** A kezenfekvo alternativa (ne menjen
+   senkinek) egy jovahagyast NEMITANA EL, ami megakasztja a Bash-hivast -- az rosszabb,
+   mint a zaj. Merve: a 8668856531 ma mind a nyolc agens allowFrom-jaban benne van.
+
+**AMIT EZ NEM FED:** nincs ra unit-teszt. A `reply-meta.ts` kulon fuggvenyben all, ezert
+tesztelheto; ez a logika a vendor fajlban, inline. A szintaxist `bun build`-del
+ellenoriztem, a harom agat olvasassal. Eles igazolas egy valodi jovahagyas-prompt lenne.
+
 ## Hogyan alkalmazd (friss telepitesen, vagy egy plugin-frissites utan)
 
 A legmegbizhatobb ut EGYSZERU FAJL-VISSZAMASOLAS, nem ujraforditas vagy

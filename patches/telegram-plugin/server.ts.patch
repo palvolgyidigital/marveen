@@ -1,5 +1,5 @@
---- server.ts.orig	2026-09-04 12:52:15.141259668 +0200
-+++ server.ts.patched	2026-09-04 12:51:57.028933974 +0200
+--- patches/telegram-plugin/server.ts.orig	2026-10-09 01:31:22.565031655 +0200
++++ patches/telegram-plugin/server.ts.patched	2026-10-12 12:21:14.791931653 +0200
 @@ -23,6 +23,7 @@
  import { homedir } from 'os'
  import { execFileSync } from 'child_process'
@@ -17,11 +17,107 @@
        '',
        'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, and edit_message for interim progress updates. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
        '',
-@@ -977,6 +978,7 @@
+@@ -443,7 +444,27 @@
+       .text('See more', `perm:more:${request_id}`)
+       .text('✅ Allow', `perm:allow:${request_id}`)
+       .text('❌ Deny', `perm:deny:${request_id}`)
+-    for (const chat_id of access.allowFrom) {
++    // MARVEEN-PATCH(permleak1012): a vendor minden PAROSITOTT chatre elkuldi a
++    // jovahagyas-kerest. Ket mert eset nalunk: 2026-08-03 David, 2026-09-11 Abel
++    // kapta meg egy sub-agens Bash-promptjat, amihez semmi koze nem volt. Egy
++    // ilyen prompt utvonalat, parancsot vagy parameter-erteket is tartalmazhat.
++    // Ha a lenti fajl EGY chat_id-t tartalmaz, a prompt CSAK oda megy. Ha a fajl
++    // hianyzik vagy ures, a vendor viselkedes valtozatlan -- nincs regresszio.
++    let permTargets = access.allowFrom
++    try {
++      const only = readFileSync('/home/pdb/marveen/store/permission-prompt-chat.txt', 'utf8').trim()
++      if (only) {
++        if (access.allowFrom.includes(only)) {
++          permTargets = [only]
++        } else {
++          // A konfiguralt chat nincs parositva EZEN a csatornan. Nem nemitunk el
++          // egy jovahagyast (az a Bash-hivast akasztana meg), hanem a vendor
++          // viselkedesre esunk vissza, es ezt LATHATOAN jelezzuk.
++          process.stderr.write(`permission_request: configured chat ${only} not in allowFrom, falling back to broadcast\n`)
++        }
++      }
++    } catch {}
++    for (const chat_id of permTargets) {
+       void bot.api.sendMessage(chat_id, text, { reply_markup: keyboard }).catch(e => {
+         process.stderr.write(`permission_request send to ${chat_id} failed: ${e}\n`)
+       })
+@@ -699,38 +720,9 @@
+   )
+ })
+ 
+-bot.command('help', async ctx => {
+-  if (!dmCommandGate(ctx)) return
+-  await ctx.reply(
+-    `Messages you send here route to a paired Claude Code session. ` +
+-    `Text and photos are forwarded; replies and reactions come back.\n\n` +
+-    `/start — pairing instructions\n` +
+-    `/status — check your pairing state`
+-  )
+-})
+-
+-bot.command('status', async ctx => {
+-  const gated = dmCommandGate(ctx)
+-  if (!gated) return
+-  const { access, senderId } = gated
+-
+-  if (access.allowFrom.includes(senderId)) {
+-    const name = ctx.from!.username ? `@${ctx.from!.username}` : senderId
+-    await ctx.reply(`Paired as ${name}.`)
+-    return
+-  }
+-
+-  for (const [code, p] of Object.entries(access.pending)) {
+-    if (p.senderId === senderId) {
+-      await ctx.reply(
+-        `Pending pairing — run in Claude Code:\n\n/telegram:access pair ${code}`
+-      )
+-      return
+-    }
+-  }
++// MARVEEN-PATCH(elsokor922-d4): /status and /help belong to the command hook (help handler removed)
+ 
+-  await ctx.reply(`Not paired. Send me a message to get a pairing code.`)
+-})
++// MARVEEN-PATCH(elsokor922-d4): /status and /help belong to the command hook (status handler removed)
+ 
+ // Inline-button handler for permission requests. Callback data is
+ // `perm:allow:<id>`, `perm:deny:<id>`, or `perm:more:<id>`.
+@@ -967,6 +959,7 @@
+ 
+   // image_path goes in meta only — an in-content "[image attached — read: PATH]"
+   // annotation is forgeable by any allowlisted sender typing that string.
++  try { const evidFile = join(STATE_DIR, 'inbound-evidence.jsonl'); try { if (statSync(evidFile).size > 262144) renameSync(evidFile, evidFile + '.1') } catch {}; writeFileSync(evidFile, JSON.stringify({ chat_id, message_id: msgId != null ? String(msgId) : null, text, at: Date.now() }) + '\n', { flag: 'a', mode: 0o600 }) } catch {} // MARVEEN-PATCH(cmd920-evid): inbound evidence for owner write commands
+   mcp.notification({
+     method: 'notifications/claude/channel',
+     params: {
+@@ -976,7 +969,9 @@
+         ...(msgId != null ? { message_id: String(msgId) } : {}),
          user: from.username ?? String(from.id),
          user_id: String(from.id),
++        ...(ctx.message?.forward_origin ? { forwarded: '1' } : {}), // MARVEEN-PATCH(elsokor922-fwd): forwarded flag for the command hook
          ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
 +        ...replyMeta(ctx.message?.reply_to_message),
          ...(imagePath ? { image_path: imagePath } : {}),
          ...(attachment ? {
            attachment_kind: attachment.kind,
+@@ -1011,14 +1006,7 @@
+           attempt = 0
+           botUsername = info.username
+           process.stderr.write(`telegram channel: polling as @${info.username}\n`)
+-          void bot.api.setMyCommands(
+-            [
+-              { command: 'start', description: 'Welcome and setup guide' },
+-              { command: 'help', description: 'What this bot can do' },
+-              { command: 'status', description: 'Check your pairing status' },
+-            ],
+-            { scope: { type: 'all_private_chats' } },
+-          ).catch(() => {})
++          // MARVEEN-PATCH(elsokor922-d4): /status and /help belong to the command hook (setMyCommands menu removed)
+         },
+       })
+       return // bot.stop() was called — clean exit from the loop
