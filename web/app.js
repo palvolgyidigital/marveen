@@ -2421,7 +2421,11 @@ function collapseEmptyDetailSection(sectionId, isEmpty, linkText) {
   // varnak"); ha kinyitunk, azt NE kenyszeritsuk lathatova.
   const sajatLogika = new Set(['cardBlockingWrap', 'cardLabelNewForm', 'cardAddSubtaskSection'])
   for (const el of body) {
-    el.style.display = isEmpty ? 'none' : (sajatLogika.has(el.id) ? el.style.display : '')
+    // Ket kulon, LITERALIS ertekadas, nem egy haromagu kifejezes: a style-prop
+    // forras-kapu csak akkor fogadja el, ha minden ag konstans, es a korabbi
+    // alak `el.style.display`-t olvasott vissza az egyik agban.
+    if (isEmpty) el.style.display = 'none'
+    else if (!sajatLogika.has(el.id)) el.style.display = ''
   }
   toggle.style.display = isEmpty ? '' : 'none'
 }
@@ -3228,7 +3232,10 @@ async function showCardDetail(card) {
           // visszamerheto teszteles kozben, es a kollega is masolhatja.
           const mailto = `mailto:${encodeURIComponent(cimek)}?subject=${encodeURIComponent(targy)}&body=${encodeURIComponent(torzs)}`
           emailBtn.dataset.mailto = mailto
-          emailBtn.onclick = () => { window.location.href = mailto }
+          // A kesz cim safeHref-en megy at, mielott navigalunk: csak http(s) es
+          // mailto jut at rajta, es ures eredmenynel NEM navigalunk, mert az ures
+          // href a lap ujratoltese lenne, nem egy nem-muvelet.
+          emailBtn.onclick = () => { const cel = safeHref(mailto); if (cel) window.location.href = cel }
         }
       } catch { /* partner nem elerheto -> a gomb rejtve marad */ }
     }
@@ -21230,9 +21237,9 @@ function _felelosOpciok(kivalasztott) {
   const k = kivalasztott || ''
   const ures = `<option value=""${k === '' ? ' selected' : ''}>nincs felelős</option>`
   const csoportok = PN_FELELOSOK.map(cs =>
-    `<optgroup label="${cs.csoport}">` +
+    `<optgroup label="${escapeHtml(cs.csoport)}">` +
     cs.tagok.map(([ertek, nev]) =>
-      `<option value="${ertek}"${k === ertek ? ' selected' : ''}>${nev}</option>`).join('') +
+      `<option value="${escapeHtml(ertek)}"${k === ertek ? ' selected' : ''}>${escapeHtml(nev)}</option>`).join('') +
     `</optgroup>`).join('')
   // Ha a kartyan olyan felelos all, ami nincs a listan, NE tuntessuk el nemán:
   // inkabb jelenjen meg sajat sorkent, hogy latszodjon, mi van ratarolva.
@@ -21299,15 +21306,15 @@ function _pnFeladatokHtml(p, cards) {
     const kesz = sajat.filter(x => x.status === 'done').length
     return _pnFeladatSorHtml(p, c, false, sajat.length ? `${kesz}/${sajat.length} lépés kész` : '')
       + sajat.map(l => _pnFeladatSorHtml(p, l, true, '')).join('')
-      + `<div id="pnLepesForm-${c.id}" class="pn-lepes" hidden>
+      + `<div id="pnLepesForm-${escapeHtml(c.id)}" class="pn-lepes" hidden>
           <div class="pn-item">
-            <input id="pnLepesTitle-${c.id}" class="input" style="width:100%;font-size:12.5px" placeholder="Mi a lépés? Egy mondat.">
+            <input id="pnLepesTitle-${escapeHtml(c.id)}" class="input" style="width:100%;font-size:12.5px" placeholder="Mi a lépés? Egy mondat.">
             <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
-              <input id="pnLepesDue-${c.id}" class="input" type="date" style="width:145px;font-size:12px">
-              <select id="pnLepesAssignee-${c.id}" class="input" style="width:130px;font-size:12px">${_felelosOpciok(c.assignee || '')}</select>
-              <button class="btn-primary btn-compact" onclick="saveLepes('${p.id}','${c.id}')">Mentés</button>
-              <button class="btn-secondary btn-compact" onclick="hideLepesForm('${c.id}')">Mégse</button>
-              <span id="pnLepesMsg-${c.id}" style="font-size:12px;color:var(--text-muted)"></span>
+              <input id="pnLepesDue-${escapeHtml(c.id)}" class="input" type="date" style="width:145px;font-size:12px">
+              <select id="pnLepesAssignee-${escapeHtml(c.id)}" class="input" style="width:130px;font-size:12px">${_felelosOpciok(c.assignee || '')}</select>
+              <button class="btn-primary btn-compact" onclick="saveLepes(${jsArg(p.id)},${jsArg(c.id)})">Mentés</button>
+              <button class="btn-secondary btn-compact" onclick="hideLepesForm(${jsArg(c.id)})">Mégse</button>
+              <span id="pnLepesMsg-${escapeHtml(c.id)}" style="font-size:12px;color:var(--text-muted)"></span>
             </div>
           </div>
         </div>`
@@ -21325,38 +21332,38 @@ function _pnFeladatSorHtml(p, c, lepes, jelzes) {
   return `<div class="pn-item${c.status === 'done' ? ' is-done' : ''}${lepes ? ' pn-lepes-sor' : ''}">
         <div style="display:flex;gap:10px;align-items:flex-start">
           <input type="checkbox" ${c.status === 'done' ? 'checked' : ''} title="Kész"
-                 data-elozo="${c.status}"
+                 data-elozo="${escapeHtml(c.status)}"
                  style="margin-top:3px;width:17px;height:17px;flex:none;cursor:pointer"
-                 onchange="toggleTaskDone('${p.id}','${c.id}', this.checked, this.dataset.elozo)">
+                 onchange="toggleTaskDone(${jsArg(p.id)},${jsArg(c.id)}, this.checked, this.dataset.elozo)">
           <div style="min-width:0;flex:1">
             <input class="pn-task-title" value="${escapeHtml(c.title)}" data-eredeti="${escapeHtml(c.title)}"
                    title="Kattints ide a cím átírásához. Mentés: Enter vagy kattintás máshova."
                    onkeydown="if(event.key==='Enter'){this.blur()}else if(event.key==='Escape'){this.value=this.dataset.eredeti;this.blur()}"
-                   onchange="patchTaskTitle('${p.id}','${c.id}', this)">
+                   onchange="patchTaskTitle(${jsArg(p.id)},${jsArg(c.id)}, this)">
             <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
               <select class="input" style="width:120px;font-size:11.5px;padding:3px 6px"
-                      onchange="patchTask('${p.id}','${c.id}',{assignee:this.value})">
+                      onchange="patchTask(${jsArg(p.id)},${jsArg(c.id)},{assignee:this.value})">
                 ${_felelosOpciok(c.assignee)}
               </select>
               <input type="date" class="input" style="width:135px;font-size:11.5px;padding:3px 6px"
-                     value="${c.due_date || ''}"
-                     onchange="patchTask('${p.id}','${c.id}',{due_date:this.value})">
+                     value="${escapeHtml(c.due_date || '')}"
+                     onchange="patchTask(${jsArg(p.id)},${jsArg(c.id)},{due_date:this.value})">
               <select class="input" style="width:118px;font-size:11.5px;padding:3px 6px" title="Státusz"
-                      onchange="patchTaskStatus('${p.id}','${c.id}', this.value, '${c.status}')">
+                      onchange="patchTaskStatus(${jsArg(p.id)},${jsArg(c.id)}, this.value, ${jsArg(c.status)})">
                 ${_pnStatuszOpciok(c.status)}
               </select>
               <select class="input" style="width:105px;font-size:11.5px;padding:3px 6px" title="Prioritás"
-                      onchange="patchTask('${p.id}','${c.id}',{priority:this.value})">
+                      onchange="patchTask(${jsArg(p.id)},${jsArg(c.id)},{priority:this.value})">
                 ${_pnPrioOpciok(c.priority)}
               </select>
-              ${lepes ? '' : `<button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" onclick="showLepesForm('${c.id}')">+ Lépés</button>`}
-              <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" title="Mi lett a megoldás?" onclick="showValaszForm('${c.id}')">${c.valasz ? 'Válasz átírása' : '+ Válasz'}</button>
-              <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" title="Dokumentum vagy kép csatolása (max. 20 MB)" onclick="document.getElementById('pnFajl-${c.id}').click()">+ Fájl</button>
-              <input id="pnFajl-${c.id}" type="file" hidden
-                     onchange="pnFajlFeltolt('${p.id}','${c.id}', this)">
+              ${lepes ? '' : `<button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" onclick="showLepesForm(${jsArg(c.id)})">+ Lépés</button>`}
+              <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" title="Mi lett a megoldás?" onclick="showValaszForm(${jsArg(c.id)})">${c.valasz ? 'Válasz átírása' : '+ Válasz'}</button>
+              <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0;font-size:11.5px;padding:3px 8px" title="Dokumentum vagy kép csatolása (max. 20 MB)" onclick="document.getElementById(${jsArg('pnFajl-' + c.id)}).click()">+ Fájl</button>
+              <input id="pnFajl-${escapeHtml(c.id)}" type="file" hidden
+                     onchange="pnFajlFeltolt(${jsArg(p.id)},${jsArg(c.id)}, this)">
               ${jelzes ? `<span class="pn-chip">${escapeHtml(jelzes)}</span>` : ''}
               <button class="pn-torles" title="${lepes ? 'Lépés törlése' : 'Feladat törlése'}"
-                      onclick="deleteTask('${p.id}','${c.id}', this.dataset.cim, ${lepes})"
+                      onclick="deleteTask(${jsArg(p.id)},${jsArg(c.id)}, this.dataset.cim, ${lepes ? 'true' : 'false'})"
                       data-cim="${escapeHtml(c.title)}">&times;</button>
             </div>
             ${_pnCsatolmanyokHtml(p, c)}
@@ -21389,13 +21396,13 @@ function _pnCsatolmanyokHtml(p, c) {
       ? (a.size / 1024 / 1024).toFixed(1) + ' MB'
       : Math.max(1, Math.round(a.size / 1024)) + ' kB'
     return `<span class="pn-csatolmany">
-        <a href="#" onclick="pnFajlMegnyit(event,'${a.id}', this.dataset.nev)"
+        <a href="#" onclick="pnFajlMegnyit(event,${jsArg(a.id)}, this.dataset.nev)"
            data-nev="${escapeHtml(a.filename)}" title="${escapeHtml(a.filename)}">
-          ${kep ? `<img data-att="${a.id}" alt="" class="pn-csatolmany-kep">` : ''}<span>${escapeHtml(a.filename)}</span>
+          ${kep ? `<img data-att="${escapeHtml(a.id)}" alt="" class="pn-csatolmany-kep">` : ''}<span>${escapeHtml(a.filename)}</span>
         </a>
         <span class="pn-csatolmany-meret">${meret}</span>
         <button class="pn-torles" title="Csatolmány törlése"
-                onclick="pnFajlTorles('${p.id}','${a.id}', this.dataset.nev)"
+                onclick="pnFajlTorles(${jsArg(p.id)},${jsArg(a.id)}, this.dataset.nev)"
                 data-nev="${escapeHtml(a.filename)}">&times;</button>
       </span>`
   }
@@ -21420,14 +21427,14 @@ function _pnValaszHtml(p, c) {
     ? `<div class="pn-valasz"><span class="pn-valasz-fej">Válasz</span><span class="pn-valasz-szoveg">${escapeHtml(c.valasz).replace(/\n/g, '<br>')}</span></div>`
     : ''
   return szoveg + `
-            <div id="pnValaszForm-${c.id}" class="pn-valasz-szerk" hidden>
-              <textarea id="pnValaszText-${c.id}" class="input" rows="3" style="width:100%;font-size:12.5px;resize:vertical"
+            <div id="pnValaszForm-${escapeHtml(c.id)}" class="pn-valasz-szerk" hidden>
+              <textarea id="pnValaszText-${escapeHtml(c.id)}" class="input" rows="3" style="width:100%;font-size:12.5px;resize:vertical"
                         placeholder="Mi lett a megoldás? Egy-két mondat.">${van ? escapeHtml(c.valasz) : ''}</textarea>
               <div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
-                <button class="btn-primary btn-compact" onclick="saveValasz('${p.id}','${c.id}')">Mentés</button>
-                <button class="btn-secondary btn-compact" onclick="hideValaszForm('${c.id}')">Mégse</button>
-                ${van ? `<button class="btn-secondary btn-compact" title="A válasz törlése, a feladat marad" onclick="clearValasz('${p.id}','${c.id}')">Válasz törlése</button>` : ''}
-                <span id="pnValaszMsg-${c.id}" style="font-size:12px;color:var(--text-muted)"></span>
+                <button class="btn-primary btn-compact" onclick="saveValasz(${jsArg(p.id)},${jsArg(c.id)})">Mentés</button>
+                <button class="btn-secondary btn-compact" onclick="hideValaszForm(${jsArg(c.id)})">Mégse</button>
+                ${van ? `<button class="btn-secondary btn-compact" title="A válasz törlése, a feladat marad" onclick="clearValasz(${jsArg(p.id)},${jsArg(c.id)})">Válasz törlése</button>` : ''}
+                <span id="pnValaszMsg-${escapeHtml(c.id)}" style="font-size:12px;color:var(--text-muted)"></span>
               </div>
             </div>`
 }
@@ -21468,7 +21475,7 @@ async function clearValasz(partnerId, cardId) {
 function _pnStatuszOpciok(kivalasztott) {
   const k = kivalasztott || 'planned'
   const sorok = Object.entries(PN_STATUSZ_LABEL)
-    .map(([e, n]) => `<option value="${e}"${k === e ? ' selected' : ''}>${n}</option>`).join('')
+    .map(([e, n]) => `<option value="${escapeHtml(e)}"${k === e ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')
   const extra = PN_STATUSZ_LABEL[k] ? '' : `<option value="${escapeHtml(k)}" selected>${escapeHtml(k)} (ismeretlen)</option>`
   return sorok + extra
 }
@@ -21476,7 +21483,7 @@ function _pnStatuszOpciok(kivalasztott) {
 function _pnPrioOpciok(kivalasztott) {
   const k = kivalasztott || 'normal'
   const sorok = Object.entries(PN_PRIO_LABEL)
-    .map(([e, n]) => `<option value="${e}"${k === e ? ' selected' : ''}>${n}</option>`).join('')
+    .map(([e, n]) => `<option value="${escapeHtml(e)}"${k === e ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')
   const extra = PN_PRIO_LABEL[k] ? '' : `<option value="${escapeHtml(k)}" selected>${escapeHtml(k)} (ismeretlen)</option>`
   return sorok + extra
 }
@@ -21494,7 +21501,7 @@ function _partnerInitials(nev) {
   // A vezeto irasjeleket dobjuk el: a "[TESZT] LumenPro" monogramja igy "LG" lesz,
   // nem "[L". Idezojellel vagy zarojellel kezdodo valodi cegnevnel is ez a helyes.
   const sz = String(nev || '?').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean)
-  return ((sz[0] || '?')[0] + (sz[1] ? sz[1][0] : '')).toUpperCase()
+  return escapeHtml(((sz[0] || '?')[0] + (sz[1] ? sz[1][0] : '')).toUpperCase())
 }
 
 // JELENLEG NEM HASZNALT a felületen: David 2026-10-08 11:46-kor levette a kovetkezo-lepes
@@ -21517,7 +21524,7 @@ function _partnerDueText(p) {
 // kovetkezo-lepes sor lekerult a kartyarol; a darabszam vette at a helyet, es az
 // allapot-szin is a feladatokat koveti, nem a next_step_due-t.
 function _partnerCardHtml(p) {
-  const nyitott = p.open_tasks || 0
+  const nyitott = Number(p.open_tasks || 0)
   const osszes = p.all_tasks || 0
   const cls = nyitott > 0 ? 'soon' : 'none'
   const szam = nyitott > 0
@@ -21525,11 +21532,11 @@ function _partnerCardHtml(p) {
     : (osszes ? 'nincs nyitott feladat' : 'nincs feladat')
   // A lezart tetelek szama csak akkor erdekes, ha van is ilyen -- kulonben zaj.
   const lezart = osszes - nyitott
-  return `<div class="pn-card is-${cls}" onclick="openPartner('${p.id}')">
+  return `<div class="pn-card is-${cls}" onclick="openPartner(${jsArg(p.id)})">
     <div class="pn-row">
       <div class="pn-avatar">${_partnerInitials(p.name)}</div>
       <div class="pn-main">
-        <div class="pn-name">${escapeHtml(p.name)}<span class="pn-chip">${PARTNER_TYPE_LABEL[p.type] || p.type}</span></div>
+        <div class="pn-name">${escapeHtml(p.name)}<span class="pn-chip">${escapeHtml(PARTNER_TYPE_LABEL[p.type] || p.type)}</span></div>
         <div class="pn-count-line is-${cls}">${szam}${lezart > 0 ? `<span class="pn-meta" style="margin:0">&middot; ${lezart} lezárt</span>` : ''}</div>
         ${_pnKartyaTetelekHtml(p)}
       </div>
@@ -21588,9 +21595,9 @@ const PN_DOT = { late: '#d9534f', soon: '#d9a441', ok: '#4caf7d', none: 'var(--t
 function _partnerColumn(cim, arr, szin) {
   return `<div class="pn-col">
     <div class="pn-col-header">
-      <span class="pn-dot" style="background:${PN_DOT[szin]}"></span>
-      <span class="pn-col-title">${cim}</span>
-      <span class="pn-col-count">${arr.length}</span>
+      <span class="pn-dot" style="background:${escapeHtml(safeCssColor(PN_DOT[szin]))}"></span>
+      <span class="pn-col-title">${escapeHtml(cim)}</span>
+      <span class="pn-col-count">${Number(arr.length)}</span>
     </div>
     ${arr.length ? arr.map(_partnerCardHtml).join('') : '<div class="pn-empty">nincs ilyen</div>'}
   </div>`
@@ -21633,7 +21640,7 @@ async function loadPartnersPage() {
   const sz = d.summary
   const szurve = _partnerAssignee ? ` &middot; szűrve: ${escapeHtml(_felelosNev(_partnerAssignee))}` : ''
   document.getElementById('partnersSubtitle').innerHTML =
-    `${sz.total} partner &middot; ${sz.nyitott_feladat ?? 0} nyitott feladat ${sz.van_nyitott ?? 0} partnernél${szurve}`
+    `${Number(sz.total)} partner &middot; ${Number(sz.nyitott_feladat ?? 0)} nyitott feladat ${Number(sz.van_nyitott ?? 0)} partnernél${szurve}`
 
   lista.innerHTML = `<div class="pn-board">
       ${_partnerColumn('Van nyitott feladat', vanDolog, 'soon')}
@@ -21698,21 +21705,21 @@ async function openPartner(id) {
     </div>
     <div class="pn-detail-head">
       <h2 style="font-size:20px;margin-bottom:4px">${escapeHtml(p.name)}</h2>
-      <p class="subtitle" style="margin:0">${PARTNER_TYPE_LABEL[p.type] || p.type} &middot; felelős: ${escapeHtml(p.owner ? _felelosNev(p.owner) : 'nincs megadva')}${p.country ? ' &middot; ' + escapeHtml(p.country) : ''}</p>
+      <p class="subtitle" style="margin:0">${escapeHtml(PARTNER_TYPE_LABEL[p.type] || p.type)} &middot; felelős: ${escapeHtml(p.owner ? _felelosNev(p.owner) : 'nincs megadva')}${p.country ? ' &middot; ' + escapeHtml(p.country) : ''}</p>
     </div>
     ${p.note ? `<div class="pn-item" style="line-height:1.55">${escapeHtml(p.note)}</div>` : ''}
 
     ${/SAP k[oó]d:\s*[A-Z]\d{3}/.test(p.note || '') ? `
     <div class="pn-section">Áruház-kimutatás
-      <button class="btn-primary btn-compact" style="text-transform:none;letter-spacing:0" id="pnKimutatasBtn" onclick="aruhazKimutatas('${p.id}')">Lekérem az adatokat</button>
+      <button class="btn-primary btn-compact" style="text-transform:none;letter-spacing:0" id="pnKimutatasBtn" onclick="aruhazKimutatas(${jsArg(p.id)})">Lekérem az adatokat</button>
     </div>
     <div class="pn-item" id="pnKimutatasBox">
       <div class="pn-meta" id="pnKimutatasMsg">Friss IDP-riport letöltése és összevetése a saját készletünkkel. Körülbelül fél perc.</div>
       <div id="pnKimutatasOut" style="white-space:pre-wrap;font-size:12.5px;line-height:1.5;margin-top:10px"></div>
     </div>` : ''}
 
-    <div class="pn-section">Kapcsolattartók &middot; ${d.contacts.length}
-      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showContactForm('${p.id}')">+ Kapcsolattartó</button>
+    <div class="pn-section">Kapcsolattartók &middot; ${Number(d.contacts.length)}
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showContactForm(${jsArg(p.id)})">+ Kapcsolattartó</button>
     </div>
     <div id="pnContactForm" hidden>
       <div class="pn-item">
@@ -21725,7 +21732,7 @@ async function openPartner(id) {
           <input id="pnContactPhone" class="input" style="flex:1 1 140px;min-width:130px;font-size:13px" placeholder="Telefon">
         </div>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn-primary btn-compact" onclick="saveContact('${p.id}')">Mentés</button>
+          <button class="btn-primary btn-compact" onclick="saveContact(${jsArg(p.id)})">Mentés</button>
           <button class="btn-secondary btn-compact" onclick="hideContactForm()">Mégse</button>
           <span id="pnContactMsg" style="font-size:12px;color:var(--text-muted)"></span>
         </div>
@@ -21743,11 +21750,15 @@ async function openPartner(id) {
         // "level" cimken all, kulon linkkent. A kepesseg megmarad, csak celzottabb lett.
         const vanEmail = !!(c.email && c.email.trim())
         const mailtoCim = vanEmail ? encodeURIComponent(c.email).replace(/%40/g, '@') : ''
-        const mezo = (kulcs, ertek, helykitolto, szel) =>
-          `<input class="pn-inline" style="${szel}" placeholder="${helykitolto}"
+        // A szelesseg SZAM, nem kesz CSS-szoveg: igy a stilus-ertek szamnak
+        // bizonyithato, es nem egy parameteren at bejovo szabad szoveg. A
+        // mezo-kulcs jsArg-on megy at, es idezojeles kulcsként all az
+        // objektum-literalban, ami ervenyes JS.
+        const mezo = (kulcs, ertek, helykitolto, szelPx) =>
+          `<input class="pn-inline" style="width:${Number(szelPx)}px" placeholder="${escapeHtml(helykitolto)}"
                   value="${escapeHtml(ertek || '')}" data-eredeti="${escapeHtml(ertek || '')}"
                   onkeydown="if(event.key==='Enter'){this.blur()}else if(event.key==='Escape'){this.value=this.dataset.eredeti;this.blur()}"
-                  onchange="patchContact('${p.id}','${c.id}',{${kulcs}:this.value})">`
+                  onchange="patchContact(${jsArg(p.id)},${jsArg(c.id)},{${jsArg(kulcs)}:this.value})">`
         return `<div class="pn-item${c.status === 'inactive' ? ' is-done' : ''}">
           <div class="pn-row">
             <div class="pn-avatar">${_partnerInitials(c.name)}</div>
@@ -21756,20 +21767,20 @@ async function openPartner(id) {
                 <input class="pn-inline pn-inline-nev" value="${escapeHtml(c.name)}" data-eredeti="${escapeHtml(c.name)}"
                        title="A név kötelező. Enter ment, Escape eldob."
                        onkeydown="if(event.key==='Enter'){this.blur()}else if(event.key==='Escape'){this.value=this.dataset.eredeti;this.blur()}"
-                       onchange="patchContactName('${p.id}','${c.id}', this)">
-                ${vanEmail ? `<a class="pn-chip" style="text-decoration:none" href="mailto:${mailtoCim}" title="Levél írása a saját leveleződdel">levél</a>` : ''}
+                       onchange="patchContactName(${jsArg(p.id)},${jsArg(c.id)}, this)">
+                ${vanEmail ? `<a class="pn-chip" style="text-decoration:none" href="${escapeHtml(safeHref('mailto:' + mailtoCim))}" title="Levél írása a saját leveleződdel">levél</a>` : ''}
               </div>
               <div style="display:flex;gap:6px;margin-top:5px;align-items:center;flex-wrap:wrap">
-                ${mezo('role', c.role, 'beosztás', 'width:120px')}
-                ${mezo('email', c.email, 'e-mail cím', 'width:190px')}
-                ${mezo('phone', c.phone, 'telefon', 'width:130px')}
+                ${mezo('role', c.role, 'beosztás', 120)}
+                ${mezo('email', c.email, 'e-mail cím', 190)}
+                ${mezo('phone', c.phone, 'telefon', 130)}
                 <select class="input" style="width:100px;font-size:11.5px;padding:3px 6px" title="Aktív vagy már nem dolgozik ott"
-                        onchange="patchContact('${p.id}','${c.id}',{status:this.value})">
+                        onchange="patchContact(${jsArg(p.id)},${jsArg(c.id)},{status:this.value})">
                   <option value="active"${c.status !== 'inactive' ? ' selected' : ''}>aktív</option>
                   <option value="inactive"${c.status === 'inactive' ? ' selected' : ''}>nem aktív</option>
                 </select>
                 <button class="pn-torles" title="Kapcsolattartó törlése"
-                        onclick="deleteContact('${p.id}','${c.id}', this.dataset.nev)"
+                        onclick="deleteContact(${jsArg(p.id)},${jsArg(c.id)}, this.dataset.nev)"
                         data-nev="${escapeHtml(c.name)}">&times;</button>
               </div>
             </div>
@@ -21778,8 +21789,8 @@ async function openPartner(id) {
       }).join('') : '<div class="pn-empty">Nincs megnevezett kapcsolattartó. A cég nem válaszol levélre, ezért ez hiány, nem részletkérdés.</div>'}
 
     <div class="pn-section">Feladatok &middot; ${nyitott} nyitott${lezart ? `, ${lezart} lezárt` : ''}
-      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showTaskForm('${p.id}')">+ Feladat</button>
-      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="togglePartnerDone('${p.id}')">${_partnerDoneVisible ? 'Lezártak elrejtése' : 'Lezártak mutatása'}</button>
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showTaskForm(${jsArg(p.id)})">+ Feladat</button>
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="togglePartnerDone(${jsArg(p.id)})">${_partnerDoneVisible ? 'Lezártak elrejtése' : 'Lezártak mutatása'}</button>
     </div>
     <div id="pnTaskForm" hidden>
       <div class="pn-item">
@@ -21795,7 +21806,7 @@ async function openPartner(id) {
             <option value="high">magas</option>
             <option value="urgent">sürgős</option>
           </select>
-          <button class="btn-primary btn-compact" onclick="saveTask('${p.id}')">Mentés</button>
+          <button class="btn-primary btn-compact" onclick="saveTask(${jsArg(p.id)})">Mentés</button>
           <button class="btn-secondary btn-compact" onclick="hideTaskForm()">Mégse</button>
           <span id="pnTaskMsg" style="font-size:12px;color:var(--text-muted)"></span>
         </div>
@@ -21803,8 +21814,8 @@ async function openPartner(id) {
     </div>
     ${_pnFeladatokHtml(p, d.cards)}
 
-    <div class="pn-section">Előzmény &middot; ${d.interactions.length}
-      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showMemoForm('${p.id}')">+ Memó</button>
+    <div class="pn-section">Előzmény &middot; ${Number(d.interactions.length)}
+      <button class="btn-secondary btn-compact" style="text-transform:none;letter-spacing:0" onclick="showMemoForm(${jsArg(p.id)})">+ Memó</button>
     </div>
     <div id="pnMemoForm" hidden>
       <div class="pn-item">
@@ -21818,7 +21829,7 @@ async function openPartner(id) {
             <option value="rendeles">rendelés</option>
             <option value="egyeb">egyéb</option>
           </select>
-          <button class="btn-primary btn-compact" onclick="saveMemo('${p.id}')">Mentés</button>
+          <button class="btn-primary btn-compact" onclick="saveMemo(${jsArg(p.id)})">Mentés</button>
           <button class="btn-secondary btn-compact" onclick="hideMemoForm()">Mégse</button>
           <span id="pnMemoMsg" style="font-size:12px;color:var(--text-muted)"></span>
         </div>
@@ -22311,8 +22322,8 @@ function _partnerFelelosSzuroFeltolt() {
   if (!sel) return
   sel.innerHTML = '<option value="">Minden felelős</option>' +
     PN_FELELOSOK.map(cs =>
-      `<option disabled>— ${cs.csoport} —</option>` +
-      cs.tagok.map(([e, nev]) => `<option value="${e}">${nev}</option>`).join('')
+      `<option disabled>— ${escapeHtml(cs.csoport)} —</option>` +
+      cs.tagok.map(([e, nev]) => `<option value="${escapeHtml(e)}">${escapeHtml(nev)}</option>`).join('')
     ).join('')
   sel.value = _partnerAssignee
 }
