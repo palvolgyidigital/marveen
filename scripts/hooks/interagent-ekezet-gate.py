@@ -42,6 +42,7 @@ _STORE_DIR = os.path.join(os.path.dirname(_SCRIPTS_DIR), "store")
 _OVERRIDE_PATH = os.path.join(_STORE_DIR, ".interagent-ekezet-override.json")
 _LOG_PATH = os.path.join(_STORE_DIR, "outgoing-copy-gate.log")
 _OVERRIDE_TTL = 90
+_OVERRIDE_DUP_WINDOW = 20  # masodperc: ugyanannak a parancsnak a duplikalt hook-futasai
 
 # A DETEKCIO A KOZOS MODULBAN VAN, NEM ITT (osszevonva 2026-09-18 12:0x).
 # MIERT: ugyanezt az ellenorzest egyetlen delelott ot kulon helyen irtam meg kezzel, es a
@@ -76,19 +77,50 @@ def write_override(indok: str) -> None:
 
 
 def _override_elhasznal() -> bool:
+    """Az override EGY PARANCSRA szol, nem egy HOOK-HIVASRA.
+
+    Ez a kapu KET helyen van regisztralva (a HOME-szintu es a projekt
+    .claude/settings.json-ban ugyanarra a Bash-matcherre), ezert minden parancsnal
+    KETSZER fut le. A regi, azonnal torlo alak ezert hasznalhatatlan volt: az elso
+    futas elhasznalta es atengedett, a masodik mar nem talalta, es megallitotta
+    UGYANAZT a parancsot. Merve eloszor az uzenet-hossz-gate-nel (2026-10-07), majd
+    elesben a tudastagadas-gate-nel (2026-10-13 10:34).
+
+    Ezert: az elso felhasznalas csak MEGJELOLI a fajlt (`felhasznalva_ts`), es onnan
+    _OVERRIDE_DUP_WINDOW masodpercen belul ugyanaz az override meg atmegy. Utana
+    torles, tehat az "egyszer hasznalhato" A PARANCSRA nezve megmarad.
+    """
     try:
         with open(_OVERRIDE_PATH, encoding="utf8") as fh:
             d = json.load(fh)
     except Exception:  # noqa: BLE001
         return False
-    if int(time.time()) - int(d.get("ts", 0)) > _OVERRIDE_TTL:
+    most = int(time.time())
+    if most - int(d.get("ts", 0)) > _OVERRIDE_TTL:
+        try:
+            os.remove(_OVERRIDE_PATH)
+        except Exception:  # noqa: BLE001
+            pass
         return False
+
+    elso = d.get("felhasznalva_ts")
+    if elso is None:
+        d["felhasznalva_ts"] = most
+        try:
+            with open(_OVERRIDE_PATH, "w", encoding="utf8") as fh:
+                json.dump(d, fh, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
+        _naploz("OVERRIDE felhasznalva")
+        return True
+    if most - int(elso) <= _OVERRIDE_DUP_WINDOW:
+        _naploz("OVERRIDE ismetelt hivas (ugyanaz a parancs)")
+        return True
     try:
         os.remove(_OVERRIDE_PATH)
     except Exception:  # noqa: BLE001
         pass
-    _naploz("OVERRIDE felhasznalva")
-    return True
+    return False
 
 
 def _payload_szovegek(cmd: str):

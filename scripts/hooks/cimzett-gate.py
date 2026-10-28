@@ -37,6 +37,7 @@ _OVERRIDE_PATH = os.path.join(_STORE_DIR, ".cimzett-gate-override.json")
 _LOG_PATH = os.path.join(_STORE_DIR, "outgoing-copy-gate.log")
 _UTOLSO_PATH = os.path.join(_STORE_DIR, ".cimzett-gate-utolso.json")
 _OVERRIDE_TTL = 90  # masodperc
+_OVERRIDE_DUP_WINDOW = 20  # masodperc: ugyanannak a kuldesnek a duplikalt hook-futasai
 _UTOLSO_TTL = 24 * 3600  # a session -> utolso cimzett bejegyzes elettartama
 
 
@@ -78,9 +79,23 @@ def write_override(reason: str, chat_id: str) -> None:
 
 
 def consume_override(chat_id: str):
-    """Ha van FRISS, ERRE a chat_id-re szolo override, fogyaszd el (torold) es
-    add vissza az indoklast. Kulonben None -- es a fajlt EROSEN torold, ha
-    lejart, hogy ne maradjon ott hamis biztonsagot adva."""
+    """Ha van FRISS, ERRE a chat_id-re szolo override, add vissza az indoklast.
+
+    AZ OVERRIDE EGY KULDESRE SZOL, NEM EGY HOOK-HIVASRA. Ez a kapu KET helyen van
+    regisztralva (a HOME-szintu es a projekt .claude/settings.json-ban ugyanarra a
+    matcherre), ezert minden kuldesnel KETSZER fut le. A regi, azonnal torlo alak
+    ezert hasznalhatatlan volt: az elso futas elhasznalta es atengedett, a masodik
+    mar nem talalta, es megallitotta UGYANAZT a kuldest. Merve eloszor az
+    uzenet-hossz-gate-nel (2026-10-07), majd elesben a tudastagadas-gate-nel
+    (2026-10-13 10:34): a naplo `OVERRIDE hasznalva` ES `BLOKKOLVA` sort is irt
+    ugyanarra az uzenetre.
+
+    EZERT: az elso felhasznalas csak MEGJELOLI a fajlt (`consumed_at`), es a
+    jelolestol szamitott _OVERRIDE_DUP_WINDOW masodpercen belul ugyanaz a chat_id
+    meg atmehet (ez a duplikalt hook-futas ablaka, nem egy masodik uzenet
+    engedelye). Az ablakon tul a fajl torlodik, tehat az "egyszer hasznalhato"
+    szemantika A KULDESRE nezve megmarad.
+    """
     if not os.path.exists(_OVERRIDE_PATH):
         return None
     try:
@@ -88,15 +103,40 @@ def consume_override(chat_id: str):
             data = json.load(fh)
     except (OSError, ValueError):
         return None
-    fresh = (time.time() - float(data.get("written_at", 0))) <= _OVERRIDE_TTL
+
+    now = time.time()
+    fresh = (now - float(data.get("written_at", 0))) <= _OVERRIDE_TTL
     matches = str(data.get("chat_id")) == str(chat_id)
-    try:
-        os.remove(_OVERRIDE_PATH)
-    except OSError:
-        pass
-    if fresh and matches:
-        return data.get("reason") or "(indoklas nelkul)"
-    return None
+
+    def _torol():
+        try:
+            os.remove(_OVERRIDE_PATH)
+        except OSError:
+            pass
+
+    if not fresh:
+        _torol()
+        return None
+    if not matches:
+        # Mas chat_id-re szol: NE fogyasszuk el, es ne is toroljuk -- lehet, hogy
+        # a sajat kuldese meg hatravan.
+        return None
+
+    consumed_at = data.get("consumed_at")
+    if consumed_at is None:
+        data["consumed_at"] = now
+        try:
+            tmp = _OVERRIDE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, _OVERRIDE_PATH)
+        except OSError:
+            pass
+    elif (now - float(consumed_at)) > _OVERRIDE_DUP_WINDOW:
+        _torol()
+        return None
+
+    return data.get("reason") or "(indoklas nelkul)"
 
 
 # --- masodik szint: cimzett-valtaskor egyszer megallunk ----------------------
