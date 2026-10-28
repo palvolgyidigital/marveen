@@ -221,7 +221,6 @@ window._i18n.en = {
   'kanban.filter.assignee_all':    'All',
   'kanban.filter.owner_btn':       '👤 Mine',
   'kanban.filter.clear':           'Clear filters',
-  'kanban.filter.sort_label':      'Sort:',
   'kanban.btn.close_card':         '✓ Close',
   'kanban.btn.email':              '✉ Email',
   'kanban.email.tooltip':          'Email the partner contact: {names}',

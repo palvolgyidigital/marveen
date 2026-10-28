@@ -221,7 +221,6 @@ window._i18n.hu = {
   'kanban.filter.assignee_all':    'Mind',
   'kanban.filter.owner_btn':       '👤 Rám vár',
   'kanban.filter.clear':           'Szűrők törlése',
-  'kanban.filter.sort_label':      'Rendezés:',
   'kanban.btn.close_card':         '✓ Lezárás',
   'kanban.btn.email':              '✉ Email',
   'kanban.email.tooltip':          'Levél a partner kapcsolattartójának: {names}',

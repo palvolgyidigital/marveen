@@ -36,16 +36,11 @@
 // exit 3 with the reason on stderr. `--flag value` and `--flag=value` are both
 // read.
 
-import { readFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { classifyAutomated, getMessageHeaders, listMessages, sendMail, verifyAccess } from '../src/graph-mail.js'
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { basename, resolve, sep } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -148,6 +143,7 @@ function senderCheckOrExit(letter: Record<string, unknown>): void {
     process.exit(3)
   }
   if (said) console.error(said)
+}
 
 const SIGNATURE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'store', 'email-signatures')
 // The checked-in signature HTML carries a FIXED cid; every message needs its own,
