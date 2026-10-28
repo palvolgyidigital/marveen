@@ -1262,12 +1262,23 @@ export function importFleet(
         if (!c.id || !c.title || !c.status || !c.priority || c.sort_order == null) {
           logger.warn({ id: c.id }, 'Fleet import: skipping kanban card with missing required fields'); continue
         }
+        // kanban_cards.partner_id REFERENCES partners(id), and the fleet export
+        // does not carry the partners table at all. So a card whose CRM link
+        // points at a partner the target host has never seen would make the
+        // INSERT throw FOREIGN KEY and abort the whole import -- every later
+        // card, comment and event with it. The link is dropped instead, loudly:
+        // one card loses its partner, the transfer survives. Carrying partners
+        // themselves is a separate decision, not something to smuggle in here.
+        const partnerVan = c.partner_id == null
+          || db.prepare('SELECT 1 FROM partners WHERE id = ?').get(c.partner_id) != null
+        if (!partnerVan) logger.warn({ id: c.id, partner_id: c.partner_id }, 'Fleet import: unknown partner_id on card, the CRM link is dropped')
         db.prepare(
           `INSERT OR IGNORE INTO kanban_cards
            (id, title, description, test_steps, status, assignee, priority, project,
             due_date, start_date, sort_order, created_at, updated_at, archived_at, parent_id, dispatched_at,
-            claimed_by, claimed_at, claim_expires_at, version, done_evidence)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            claimed_by, claimed_at, claim_expires_at, version, done_evidence,
+            partner_id, valasz)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(c.id, c.title, c.description ?? null, c.test_steps ?? null, c.status, c.assignee ?? null,
           c.priority, c.project ?? null, c.due_date ?? null, c.start_date ?? null, c.sort_order,
           c.created_at, c.updated_at, c.archived_at ?? null, c.parent_id ?? null, c.dispatched_at ?? null,
@@ -1279,7 +1290,12 @@ export function importFleet(
           // checked against the same number after it. An export from an install
           // without the column has none: the NOT NULL column starts at 0.
           Number.isSafeInteger(c.version) && c.version >= 0 ? c.version : 0,
-          c.done_evidence ?? null)
+          c.done_evidence ?? null,
+          // The CRM link and the answer text ride along as well. A transferred
+          // card that lost partner_id would hang off no partner on the new host,
+          // and the colleague's `valasz` is the only record of how the task was
+          // resolved -- neither is reconstructible from anywhere else.
+          partnerVan ? (c.partner_id ?? null) : null, c.valasz ?? null)
       }
 
       // kanban comments (idempotent: card_id + content)

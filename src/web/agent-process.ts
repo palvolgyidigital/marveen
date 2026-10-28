@@ -4520,7 +4520,7 @@ const CONFIRM_SCROLLBACK_LINES = 500
 function capturePaneWithScrollback(session: string, host: string | null = null): string | null {
   try {
     return stripAllAnsi(stripSessionTitleBanner(captureTmux(
-      host, ['capture-pane', '-t', session, '-e', '-p', '-S', `-${CONFIRM_SCROLLBACK_LINES}`],
+      host, ['capture-pane', '-t', exactTmuxTarget(session), '-e', '-p', '-S', `-${CONFIRM_SCROLLBACK_LINES}`],
     )))
   } catch {
     return null
