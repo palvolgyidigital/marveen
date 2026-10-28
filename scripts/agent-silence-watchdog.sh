@@ -387,6 +387,14 @@ alert_owner() {
   if [ "${AGENT_SILENCE_ALERT_DRYRUN:-}" = "1" ]; then
     echo "ALERT_DRYRUN: $msg"; return 0
   fi
+  # A TELEGRAM-ERTESITES ALAPBOL KI VAN KAPCSOLVA. Marci kerese, 2026-10-18 18:43, szo
+  # szerint: "Eleve nem kerem ezeket az uzeneteket. Folyamatosan jonnek." Az orszem tovabb
+  # MER es tovabb NAPLOZ (store/agent-silence-watchdog.log), csak nem kuld Telegramot.
+  # Visszakapcsolni: AGENT_SILENCE_ALERT_TELEGRAM=1 a kornyezetben (vagy a systemd unitban).
+  if [ "${AGENT_SILENCE_ALERT_TELEGRAM:-0}" != "1" ]; then
+    log "ALERT (Telegram kikapcsolva, csak naplo -- AGENT_SILENCE_ALERT_TELEGRAM=1 kapcsolja be): $msg"
+    return 0
+  fi
   tg_dir="${TELEGRAM_STATE_DIR:-}"
   if [ -z "$tg_dir" ]; then
     tg_dir="$INSTALL_DIR/.claude/channels/telegram"
@@ -442,7 +450,13 @@ main() {
     log "verdict=silent ([${SILENT_LIST# }]) but within alert cooldown ($(( now - last ))s) -- skip alert"
     return 0
   fi
-  if [ "${SILENT_LIST# }" = "$last_set" ] && [ $(( now - last )) -lt 86400 ]; then
+  # A NEVEKET hasonlitjuk ossze, nem a leletet: a lista `cili:98h` alakban tartalmazza az
+  # orak szamat is, ami oranként valtozik, ezert a valtozatlansag-szures SOHA nem fogott
+  # (merve 2026-10-18: ugyanaz a `cili` negyszer ment ki egy nap, 09:05/12:07/15:09/18:12,
+  # pontosan a 3 oras cooldown szerint; Marci kerte, hogy ne kuldozgesse).
+  silent_names="$(printf '%s\n' ${SILENT_LIST# } | sed 's/:[0-9]*h$//' | sort | tr '\n' ' ')"
+  silent_names="${silent_names% }"
+  if [ "$silent_names" = "$last_set" ] && [ $(( now - last )) -lt 86400 ]; then
     log "verdict=silent ([${SILENT_LIST# }]) but UNCHANGED since last alert ($(( now - last ))s ago) -- skip alert"
     return 0
   fi
@@ -450,7 +464,7 @@ main() {
   msg="🔴 Nema agens(ek) eszlelve (${THRESHOLD_LABEL} kuszob, ${THRESHOLD_HOURS}h): [${SILENT_LIST# }]. Egyik forrasban sincs ujabb nyom (memoria, napi naplo, eszkoz-hivas, csatorna-uzenet). Ha ez tobb agenst erint egyszerre, nezd meg a tmux session-oket es a dashboard folyamatot elkulonitve -- a 2026-09-26/28-i kiesesnel a scheduler futott, az agensek megis nemak voltak."
   log "$msg"
   if alert_owner "$msg"; then
-    echo "$now|${SILENT_LIST# }" > "$ALERT_STAMP" 2>/dev/null || true
+    echo "$now|$silent_names" > "$ALERT_STAMP" 2>/dev/null || true
   else
     log "alert not delivered -- cooldown stamp NOT written, will retry next tick"
   fi

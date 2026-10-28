@@ -20,6 +20,7 @@
  */
 
 import { chromium } from 'playwright';
+import { ellenorizUrl } from './lib/egress-allowlist.mjs';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,10 +67,26 @@ function nowLabelBudapest() {
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
 }
 
+// KET kapu, es MINDKETTONEK at kell engednie.
+//
+// 1. ALLOWED_HOSTS: ennek a FELADATNAK a szuk listaja (Pedro jovahagyasa 2026-10-16).
+// 2. A KOZPONTI kimeno lista (store/egress-allowlist.json), a scripts/lib/egress-allowlist.mjs
+//    kozos olvasojan keresztul.
+//
+// MIERT KELL A MASODIK IS, holott az elso szukebb: a feladat-lista a FAJLBAN all, a kozponti
+// lista pedig a gazda dontese. Ha egy hostot a gazda LEVESZ a kozpontirol, ez a szkript a sajat
+// masolata alapjan tovabb jarna oda -- csendben. Merve 2026-10-22: a negy scraper-host mind a
+// negy alapdomainje rajta van a kozponti `domains` listan, tehat a bekotes MA egyetlen
+// navigaciot sem allit meg (a www. elotag valodi aldomainkent atmegy).
 function assertHost(url, label) {
   const host = new URL(url).hostname;
   if (!ALLOWED_HOSTS.has(host)) {
     throw new Error(`EGRESS-TILALOM: ${label} nem engedelyezett host-ra navigalt (${host}). Megallok.`);
+  }
+  try {
+    ellenorizUrl(url);
+  } catch (e) {
+    throw new Error(`EGRESS-TILALOM (kozponti lista): ${label} -> ${e.message}`);
   }
 }
 
