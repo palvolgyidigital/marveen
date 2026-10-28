@@ -21,6 +21,7 @@
 
 import { chromium } from 'playwright';
 import { ellenorizUrl } from './lib/egress-allowlist.mjs';
+import { installZone } from './lib/install-zone.mjs';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,10 +49,13 @@ const STAND_CATEGORIES = new Set([
   'Telefonos Asztali-, Miniállvány', 'Asztali állvány', 'Állvány Tartozék',
 ]);
 
+// A telepites zonaja, nem beegetett literal (ISSUE1895): scripts/lib/install-zone.mjs
+const TZ = installZone();
+
 function todayBudapest() {
   const now = new Date();
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Budapest', year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(now);
   const get = (t) => parts.find((p) => p.type === t).value;
   return `${get('year')}-${get('month')}-${get('day')}`;
@@ -60,7 +64,7 @@ function todayBudapest() {
 function nowLabelBudapest() {
   const now = new Date();
   const d = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Budapest', year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(now);
   const get = (t) => d.find((p) => p.type === t).value;
