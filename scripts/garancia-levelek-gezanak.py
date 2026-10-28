@@ -44,6 +44,40 @@ UGYSZAM_RE = re.compile(r'\[\s*G-\d{4}-\d{3,}\s*\]', re.I)
 GARANCIA_NEV_RE = re.compile(r'\s*garancia(?![\w@.-])', re.I)
 DRY = '--dry-run' in sys.argv
 
+# FELADO-ALAPU KIZARAS. A fajl egy JSON lista, kisbetus email-cimekkel; ha nincs ott,
+# a kizaras ures, es a szkript ugy mukodik, mint eddig.
+#
+# MIERT LETEZIK (2026-10-19, Marci kerese, Telegram 10077): "Nemsokara tovabbitok egy
+# levelet az innovara. Ne nyomtasd ki ne csinaljd vele semmit, majd en foglalkozom vele."
+# A skill szovege ezt kimondja, DE a szkript MAGA vegzi az atadast, meg az elott, hogy
+# egy kor a targysort latna. Egy szoveges tilalom tehat itt nem tart: a vedelem csak akkor
+# ved, ha a kodban van. A kizart feladotol jovo levelet NEM adjuk at gezanak, a vizjel
+# normalisan lep, es a kor hangosan kiirja, hogy miert maradt el az atadas.
+KIZART_FELADOK_FAJL = os.path.join(GYOKER, 'store/garancia-kizart-feladok.json')
+
+
+def kizart_feladok():
+    """A kizart feladok kisbetus cimei. A fajl lehet lista VAGY objektum
+    (cim -> indok); az objektum-alak azert tamogatott, mert igy a MIERT ott all,
+    ahol a tilalom, es nem egy masik fajlban."""
+    try:
+        with open(KIZART_FELADOK_FAJL, encoding='utf-8') as f:
+            d = json.load(f)
+        kulcsok = d.keys() if isinstance(d, dict) else d
+        return {str(x).strip().lower() for x in kulcsok if str(x).strip()}
+    except FileNotFoundError:
+        return set()
+    except Exception as e:                                    # noqa: BLE001
+        # A HIANY ES A HIBA NEM UGYANAZ: egy olvashatatlan lista nem jelentheti azt,
+        # hogy nincs kizaras. Ilyenkor inkabb NEM adunk at semmit.
+        print('KIZARAS-LISTA OLVASHATATLAN (%s: %s) -- ovatossagbol MINDEN atadas elmarad.'
+              % (type(e).__name__, e), file=sys.stderr)
+        return None
+
+
+def felado_cim(m):
+    return (((m.get('from') or {}).get('emailAddress') or {}).get('address') or '').strip().lower()
+
 
 def creds():
     d = {}
@@ -213,7 +247,7 @@ def main():
         mb = c['MAILBOX']
         url = ('https://graph.microsoft.com/v1.0/users/%s/mailFolders/inbox/messages'
                '?$top=25&$orderby=receivedDateTime%%20desc'
-               '&$select=id,subject,receivedDateTime,toRecipients,ccRecipients,hasAttachments,body'
+               '&$select=id,subject,receivedDateTime,from,toRecipients,ccRecipients,hasAttachments,body'
                % urllib.parse.quote(mb))
         levelek = graph_get(tok, url).get('value', [])
     except Exception as e:                                    # noqa: BLE001
@@ -225,8 +259,11 @@ def main():
     utolso = v.get('last_received') or '1970-01-01T00:00:00Z'
     kezelt = set(v.get('kezelt_idk') or [])
 
-    print('Megvizsgalt levelek: %d | vizjel: %s' % (len(levelek), utolso))
-    talalatok, uj_max = [], utolso
+    kizartak = kizart_feladok()
+    print('Megvizsgalt levelek: %d | vizjel: %s | kizart felado: %s'
+          % (len(levelek), utolso,
+             'OLVASHATATLAN LISTA' if kizartak is None else len(kizartak)))
+    talalatok, kihagyott, uj_max = [], [], utolso
     for m in levelek:
         erk = m.get('receivedDateTime') or ''
         if erk > uj_max:
@@ -236,7 +273,17 @@ def main():
         m['_szoveg'] = szoveg((m.get('body') or {}).get('content'))
         talalat, indok = garancias(m['_szoveg'], m.get('subject') or '')
         if talalat:
+            cim = felado_cim(m)
+            if kizartak is None or (cim and cim in kizartak):
+                kihagyott.append((m, indok, cim))
+                continue
             talalatok.append((m, indok))
+
+    for m, indok, cim in kihagyott:
+        print('ATADAS ELMARADT (kizart felado: %s): %s | %s | indok: %s'
+              % (cim or '?', (m.get('receivedDateTime') or '?'),
+                 (m.get('subject') or '?')[:60], indok))
+        kezelt.add(m['id'])
 
     if not talalatok:
         print('GARANCIA-LEVEL: 0 uj. (A vizjel felett %d level volt.)'
