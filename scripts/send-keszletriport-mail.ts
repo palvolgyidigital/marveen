@@ -12,6 +12,8 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 
+import { APP_TZ } from '../src/config.js'
+
 const [, , filePath, toArg, ...rest] = process.argv
 const dryRun = rest.includes('--dry-run') || toArg === '--dry-run'
 const to = toArg && !toArg.startsWith('--') ? toArg : 'abel.kondics@pdb.hu'
@@ -30,9 +32,11 @@ const clientId = get('CLIENT_ID')
 const clientSecret = get('CLIENT_SECRET')
 const mailbox = get('MAILBOX')
 
-// Targy: "Keszlet riport EEEEHHNN" -- a mai datum Europe/Budapest szerint
+// Targy: "Keszlet riport EEEEHHNN" -- a mai datum a TELEPITES zonaja szerint
+// (APP_TZ, ISSUE1895), nem egy beegetett zona: a riport datuma igy ugyanaz,
+// amit a dashboard es az utemezo is mond.
 const now = new Date()
-const hu = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Budapest' }).format(now) // YYYY-MM-DD
+const hu = new Intl.DateTimeFormat('sv-SE', { timeZone: APP_TZ }).format(now) // YYYY-MM-DD
 const stamp = hu.replaceAll('-', '')
 const subject = `Készlet riport ${stamp}`
 

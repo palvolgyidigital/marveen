@@ -39,6 +39,11 @@ Usage:
   python3 scripts/edi-reggeli-ellenorzes.py          # prints the report text
   python3 scripts/edi-reggeli-ellenorzes.py --json   # machine-readable verdict
 """
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from install_zone import local_tz  # noqa: E402
 import collections
 import datetime as dt
 import json
@@ -52,7 +57,8 @@ HIBA = "/home/pdb/marveen/store/ecod-agent/cron-error.log"
 SAM_STATE = "/home/pdb/marveen/agents/sam/data/edi-mail-check/state.json"
 ORAK = 24
 
-TZ = ZoneInfo("Europe/Budapest")
+# A telepites zonaja, nem beegetett literal (ISSUE1895): scripts/lib/install_zone.py
+TZ = local_tz()
 INDIT = "ECOD Agent inditasa"
 FIGY = re.compile(r"^(\S+) - FIGYELEM: a statuszvaltas NEM ment at ezekre: ([0-9 ,]+)")
 STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
