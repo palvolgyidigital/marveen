@@ -87,6 +87,17 @@ const FIXED: Record<string, unknown> = {
   parent_id: null,
 }
 
+// kanban_cards.partner_id REFERENCES partners(id), so the generated
+// `value-of-partner_id` only inserts if that partner exists. Creating it keeps
+// the column covered by a REAL value instead of exempting it as null: a card
+// that lost its CRM link on transfer would then still pass.
+function partnerForTheReference(): void {
+  getDb().prepare(
+    `INSERT OR IGNORE INTO partners (id, name, type, status, created_at, updated_at)
+     VALUES ('value-of-partner_id', 'Fleet import fixture partner', 'partner', 'active', 1790000000, 1790000000)`
+  ).run()
+}
+
 function cardForLiveSchema(): Record<string, unknown> {
   const cols = getDb().prepare('PRAGMA table_info(kanban_cards)').all() as { name: string; type: string }[]
   const card: Record<string, unknown> = {}
@@ -101,6 +112,7 @@ function cardForLiveSchema(): Record<string, unknown> {
 describe('fleet import: a kanban card survives a real SQLite import', () => {
   it('every live kanban_cards column comes back exactly as exported', () => {
     initDatabase(':memory:')
+    partnerForTheReference()
     const card = cardForLiveSchema()
     // Positive control: the schema was read, and it is the full card table.
     expect(Object.keys(card)).toContain('title')
@@ -116,6 +128,7 @@ describe('fleet import: a kanban card survives a real SQLite import', () => {
 
   it('the import is idempotent on a real schema (INSERT OR IGNORE)', () => {
     initDatabase(':memory:')
+    partnerForTheReference()
     const card = cardForLiveSchema()
     importFleet(fleetWith([card]), { apply: true })
     const second = importFleet(fleetWith([{ ...card, title: 'Changed on the second run' }]), { apply: true }) as { errors?: string[] }
