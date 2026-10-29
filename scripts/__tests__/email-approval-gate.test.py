@@ -1142,6 +1142,16 @@ with tempfile.TemporaryDirectory() as td:
         "heredoc with a quoted delimiter": bash_payload(
             "python3 " + SENDER_REL + " --to a@example.com --subject T <<'EOF'\nTorzs.\nEOF"),
         "with 2>&1 | tail -5": bash_payload("python3 " + SENDER_REL + LETTER + " 2>&1 | tail -5"),
+        # MAILGATESIGNATURE1029: an env-var prefix (e.g. MARVEEN_MAIL_CREDS=... before
+        # npx tsx) sets the environment for this one command, same shell meaning as a
+        # cd target; it does not change which program runs, so it is canonical too.
+        "an env prefix": bash_payload("A=1 python3 " + SENDER_REL + LETTER),
+        # --signature takes a value ("hu"/"en") and lives in graph-mail.ts's own
+        # value_flags; --body - is the project's own documented stdin form (an inline
+        # HTML body trips the outgoing-copy-gate's redirect scan).
+        "graph sender with --signature and --body -": bash_payload(
+            "MARVEEN_MAIL_CREDS=/tmp/creds npx tsx " + GRAPH_REL
+            + " send --signature hu --to a@example.com --subject T --body - < /tmp/torzs.txt"),
     }
     for label, payload in canonical.items():
         code, out, err = run_gate(store, payload)
@@ -1157,8 +1167,14 @@ with tempfile.TemporaryDirectory() as td:
             "python3 " + SENDER_REL + " --to a@example.com --subject T <<EOF\nTorzs.\nEOF"),
         "a path with /./ in it": bash_payload("python3 " + REPO + "/scripts/./support-mail/" + "se" + "nd.py" + LETTER, cwd="/"),
         "an unknown flag": bash_payload("python3 " + SENDER_REL + LETTER + " --bcc x@example.org"),
-        "an env prefix": bash_payload("A=1 python3 " + SENDER_REL + LETTER),
         "a wrapper": bash_payload("timeout 30 python3 " + SENDER_REL + LETTER),
+        # MAILGATESIGNATURE1029 negative controls: the two new exceptions (env
+        # prefix, --body -) stay narrow and do not widen into neighbouring shapes.
+        "export instead of a bare assignment": bash_payload("export A=1; python3 " + SENDER_REL + LETTER),
+        "a dash-led value that is not exactly '-'": bash_payload(
+            "python3 " + SENDER_REL + LETTER.replace("'Kedves Ugyfelunk! Torzs.'", "-x")),
+        "--to with a bare dash (the exception is --body only)": bash_payload(
+            "python3 " + SENDER_REL + LETTER.replace("a@example.com", "-")),
         "a display-name recipient": bash_payload("timeout 30 python3 " + SENDER_REL
                                                  + LETTER.replace("--to a@example.com", "--to 'Ann <a@example.com>'")),
     }

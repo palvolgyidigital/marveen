@@ -918,7 +918,10 @@ def ledger_gate(kind: str, tool_input: dict, cmd: str, tool: str = "") -> None:
 # before.
 _SENDER_FLAGS = {
     "send.py": ({"--to", "--cc", "--subject", "--body"}, {"--no-owner-cc", "--html", "--html-wrap"}),
-    "graph-mail.ts": ({"--to", "--cc", "--subject", "--body", "--attach"}, {"--html"}),
+    # --signature takes a value ("hu"/"en"), so it belongs in value_flags, not
+    # bool_flags -- a bare --signature there would leave the "hu"/"en" word
+    # unconsumed, and the next loop iteration would reject it as an unknown flag.
+    "graph-mail.ts": ({"--to", "--cc", "--subject", "--body", "--attach", "--signature"}, {"--html"}),
 }
 _CANONICAL_RELATIVE = {"scripts/support-mail/send.py": "send.py", "scripts/graph-mail.ts": "graph-mail.ts"}
 
@@ -1018,6 +1021,17 @@ def canonical_sender_send(cmd: str, cwd) -> bool:
     try:
         sc = _ShapeScanner(cmd.strip(" \t\n"))
         words = sc.words_until_operator()
+        # A leading VAR=value word (e.g. MARVEEN_MAIL_CREDS=... before `npx tsx`)
+        # sets an environment variable for this one command, same shell meaning
+        # as a cd: it does not change what program runs. Each word already
+        # passed through word()'s literal-only scan (no $, no backtick), so
+        # peeling off any number of them here is as safe as the program word
+        # itself. Only a bare `VAR=value` shape counts, never `export VAR=...`.
+        _env_prefix = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+        i = 0
+        while i < len(words) and _env_prefix.match(words[i]):
+            i += 1
+        words = words[i:]
         if words[:1] == ["python3"]:
             k = 1
         elif words[:2] == ["npx", "tsx"]:
@@ -1046,7 +1060,13 @@ def canonical_sender_send(cmd: str, cwd) -> bool:
                     if j >= len(args):
                         return False
                     value = args[j]
-                if value.startswith("-"):
+                # --body - is the project's own, documented stdin-redirect form
+                # (an inline HTML body trips the outgoing-copy-gate's redirect
+                # scan, so every sender's own docs mandate `--body - < file`).
+                # The exception is this one exact value on this one flag, not a
+                # general dash-allowance: any other flag, or any other dash-led
+                # value, is still rejected below.
+                if value.startswith("-") and not (name == "--body" and value == "-"):
                     return False
             elif not (name in bool_flags and not eq):
                 return False
