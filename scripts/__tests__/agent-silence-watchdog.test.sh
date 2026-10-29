@@ -68,10 +68,23 @@ mkdir -p "$AGENTS_DIR/suba" "$AGENTS_DIR/subb"
 # Fixture scheduled-task tree: one ENABLED task per watched agent, because the
 # watchdog only watches an agent that has scheduled work. An agent missing from
 # here is correctly skipped -- that is what the last case below relies on.
+#
+# The cron is deliberately FREQUENT, not the daily "0 8 * * *" this fixture used
+# until 2026-10-29. The watchdog does not alert on age alone: past the threshold
+# it asks whether the agent was even DUE to run since its last trace
+# (last_expected_run_epoch, capped at now - EXPECTED_RUN_GRACE). With a daily
+# 08:00 cron that question's answer depends on the wall clock: run the suite
+# between 08:00 and 10:00 local and the grace-capped "last expected run" falls
+# back to YESTERDAY 08:00, which predates a 20h-old trace, so the agent counts
+# as "not due" and the silent case silently turns into ok. Measured: the suite
+# passed under CET and failed under TZ=UTC with the identical fixture, and CI
+# (UTC, 09:20) went red on a commit that touches none of this. A */5 cron means
+# "it should have run many times since its trace" at every hour, which is the
+# semantic these cases actually want.
 TASKS_DIR="$TMP/scheduled-tasks"
 for _a in main suba subb; do
   mkdir -p "$TASKS_DIR/fixture-$_a"
-  printf '{"agent":"%s","enabled":true,"schedule":"0 8 * * *"}\n' "$_a" > "$TASKS_DIR/fixture-$_a/task-config.json"
+  printf '{"agent":"%s","enabled":true,"schedule":"*/5 * * * *"}\n' "$_a" > "$TASKS_DIR/fixture-$_a/task-config.json"
 done
 unset _a
 
