@@ -3,6 +3,7 @@ import { isAbsolute, join, relative } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { hardRestartMarveenChannels, lastMainRespawnAt, MARVEEN_POST_RESPAWN_GRACE_MS, markAgentRestartPending } from './channel-monitor.js'
+import { logIfHardMemoryBand } from './memory-band-warn.js'
 import { shouldDeferForRecentRespawn } from './stuck-tool-call-watcher.js'
 import { listAgentNames, listAllAgentNames, agentDir, readAgentModel, readAgentRemoteHost, readAgentWorksourceChannel } from './agent-config.js'
 import { configDirFor } from './main-transcript-root.js'
@@ -861,6 +862,8 @@ async function performRestart(name: string): Promise<void> {
     // 19:41; the second restart WAS the first one's unnoticed failure.
     // ownsResume: this runner delivers the first prompt itself, so the generic
     // recovery brief stays out and the fresh session gets ONE prompt, not two.
+    // Card 9b6e4e6e, Part 2: warn-only, never blocks (Pedro msg 7153 approval).
+    logIfHardMemoryBand('context-guard-runner.rescueRestart', { agent: name })
     const res = await restartAgentProcess(name, { fresh: true, ownsResume: true })
     if (!res.ok) throw new Error(res.error ?? 'agent restart failed')
   }

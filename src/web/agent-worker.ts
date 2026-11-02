@@ -28,6 +28,7 @@ import { ROOT_SANDBOX_ENV } from './root-sandbox-env.js'
 import { shouldRunBackgroundServices, ALLOW_SECOND_INSTANCE_SERVICES_KEY } from './hook-registration-guard.js'
 import { exactTmuxTarget } from '../tmux-target.js'
 import { injectDbWriteGate, injectEmailSendGate, pythonHookCommand, isUnsafeHookCommand, EMAIL_GATE_MATCHER } from './agent-scaffold.js'
+import { applyAgentMemoryScope } from './agent-memory-scope.js'
 
 // =============================================================================
 // Interactive-tmux agent worker (jun.15 subscription migration).
@@ -952,6 +953,10 @@ function startWorkerSessionFor(ctx: WorkerCtx): void {
     // WORKERMCPSEND1104 part 2: only the servers in the worker's own MCP config, nothing from any other source.
     `--strict-mcp-config --mcp-config ${shArg(workerMcpConfigPath(ctx))}`
   execFileSync(TMUX, ['new-session', '-d', '-s', ctx.session, ...tmuxPaneSizeArgs(), '-c', ctx.home, 'bash', '-lc', launch], { timeout: 8000 })
+  // AGENTMEMCAP1029: same per-pane systemd-scope cap as startAgentProcess (see
+  // agent-memory-scope.ts). This is the main agent's own worker session (pedro-worker /
+  // pedro-worker-fast), always local to this user -- no crossUser skip needed.
+  applyAgentMemoryScope(ctx.session)
   logger.info({ session: ctx.session, cwd: ctx.home }, 'agent-worker: launched interactive worker session')
   // APRO920 (c)(2): same rationale as startAgentProcess's model-resolved log --
   // which config-chain element supplied the --model value.

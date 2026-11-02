@@ -47,6 +47,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verdict) MODE="verdict"; shift ;;
     --status)  MODE="status"; shift ;;
+    # Card 9b6e4e6e, Part 2: absolute MemAvailable-MB mode for the scheduler's
+    # pre-injection gate. Independent of the WARN/HARD used-pct bands and the
+    # agent-count cap below -- a low ABSOLUTE MB figure is dangerous on its own
+    # (a single runaway child can still OOM the box even with few agents running),
+    # and this is meant to be polled far more often than the reconcile loop, so it
+    # does not touch the safe-mode flag or the Telegram alert/cooldown state.
+    --min-avail) MODE="min-avail"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) shift ;;
   esac
@@ -137,6 +144,22 @@ if [[ -z "${mem_total:-}" || -z "${mem_avail:-}" || "$mem_total" -le 0 ]]; then
 fi
 used_pct=$(( (mem_total - mem_avail) * 100 / mem_total ))
 avail_mb=$(( mem_avail / 1024 ))
+
+# --- absolute MemAvailable-MB mode (short-circuits here, before the band/agent-
+# count logic below -- see the --min-avail case above for why) ---
+if [[ "$MODE" == "min-avail" ]]; then
+  threshold_mb="${MARVEEN_SCHED_MIN_AVAILABLE_MB:-1536}"
+  if (( OBSERVE )); then
+    echo "observe-only (monitor, no block): avail=${avail_mb}MB threshold=${threshold_mb}MB"
+    exit 0
+  fi
+  if (( avail_mb < threshold_mb )); then
+    echo "block low-memory: avail=${avail_mb}MB threshold=${threshold_mb}MB"
+    exit 10
+  fi
+  echo "allow: avail=${avail_mb}MB threshold=${threshold_mb}MB"
+  exit 0
+fi
 
 # --- count running non-core agents (tmux agent-* sessions; dependency-free) ---
 running=0

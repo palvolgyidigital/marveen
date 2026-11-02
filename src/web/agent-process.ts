@@ -63,6 +63,7 @@ import { provisionMemoryBoundaryDir } from './memory-boundary.js'
 import { renameSharedCredentialsIfSafe } from './claude-credentials-guard.js'
 import { atomicWriteFileSync } from './atomic-write.js'
 import { paneOneLine } from './pane-text.js'
+import { applyAgentMemoryScope } from './agent-memory-scope.js'
 import { withSessionSendLock, tryAcquireSessionSendLane, type SendLockMode } from './session-send-lock.js'
 import {
   buildTmuxInvocation,
@@ -3257,6 +3258,11 @@ export async function startAgentProcess(name: string, opts: StartOpts = {}): Pro
     // capture-pane failed against the router's empty tmux server.
     const startTarget = agentTmuxTarget(name)
     runTmux(startTarget, ['new-session', '-d', '-s', session, ...tmuxPaneSizeArgs(), buildLaunchCmd(dir)], { timeout: 10000 })
+    // AGENTMEMCAP1029: caps this pane's own systemd auto-scope (see agent-memory-scope.ts
+    // for why that scope, not a new systemd-run wrap). runAsUser agents are skipped here,
+    // not capped: a cross-user `systemctl --user` call would need sudo/dbus into another
+    // user's session, which this helper deliberately does not attempt.
+    applyAgentMemoryScope(session, { crossUser: !!startTarget.runAsUser })
 
     logger.info({ name, session, channelDir: agentChannelDir, runAsUser: startTarget.runAsUser ?? null }, 'Agent tmux session started')
     // APRO920 (c)(2): the --model value actually passed, with the config-chain
@@ -3332,6 +3338,10 @@ export async function startAgentProcess(name: string, opts: StartOpts = {}): Pro
               try { symlinkSync(agentClaudeMd, join(fallbackCwd, 'CLAUDE.md')) } catch { /* degrade to context-less */ }
             }
             runTmux(null, ['new-session', '-d', '-s', session, ...tmuxPaneSizeArgs(), buildLaunchCmd(fallbackCwd)], { timeout: 10000 })
+            // AGENTMEMCAP1029: same cap as the primary start path (see above); this
+            // fallback already always runs as the default user (target null), so no
+            // crossUser skip is needed here.
+            applyAgentMemoryScope(session)
             logger.warn({ name, session, fallbackCwd }, 'Agent --channels EPERM in trusted dir; relaunched from /tmp fallback')
           } catch (err) {
             logger.error({ err, name, session }, 'EPERM /tmp fallback relaunch failed')

@@ -3,6 +3,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT } from '../config.js'
 import { hardRestartMarveenChannels } from './channel-monitor.js'
+import { logIfHardMemoryBand } from './memory-band-warn.js'
 import { atomicWriteFileSync } from './atomic-write.js'
 import { isValidModelId, InvalidModelIdError } from '../model-id.js'
 import {
@@ -141,6 +142,8 @@ function sessionFor(name: string): string {
 }
 
 async function restartFor(name: string): Promise<void> {
+  // Card 9b6e4e6e, Part 2: warn-only, never blocks (Pedro msg 7153 approval).
+  logIfHardMemoryBand('model-fallback-runner.restartFor', { agent: name })
   if (name === MAIN_AGENT_ID) {
     // A fresh main relaunch re-reads .claude/settings.json (and thus the new
     // model). channels.sh always starts fresh for main, so a conversation is

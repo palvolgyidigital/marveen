@@ -1936,6 +1936,61 @@ function usageLimitHoldsInjection(task: ScheduledTask, agentName: string, sessio
   return true
 }
 
+// Low-memory start-suppression gate (card 9b6e4e6e, 2026-10-29 OOM incident,
+// Part 2). Delegates the actual decision to scripts/fleet-memory-gate.sh
+// --min-avail: same fail-open /proc/meminfo reader as the reconcile-loop
+// gate (memGateAllowsStart in channel-monitor.ts), but an absolute
+// MemAvailable-MB threshold (MARVEEN_SCHED_MIN_AVAILABLE_MB, default 1536MB
+// inside the script) instead of the used-pct WARN/HARD bands -- today's root
+// cause (a single pd.read_excel python3 child ballooning to 13-14G) is an
+// absolute-free-RAM problem, not an agent-count problem, so it can hit even
+// with used_pct still looking fine. Deliberately its OWN script invocation
+// (not reusing channel-monitor's MEM_GATE_SCRIPT constant) to keep the two
+// call sites independent; both point at the same file.
+//
+// Local agents only (host == null): a remote SSH agent's memory is the
+// remote host's, which /proc/meminfo on this box says nothing about -- same
+// scope decision as Part 1's agent-memory-scope.ts (remote launch path
+// untouched, flagged as a known gap, not silently assumed covered).
+const MEM_GATE_SCRIPT_PATH = join(PROJECT_ROOT, 'scripts', 'fleet-memory-gate.sh')
+let lastLowMemoryNoticeAtMs = 0
+const LOW_MEMORY_NOTICE_COOLDOWN_MS = 30 * 60_000
+
+function lowMemoryHoldsInjection(task: ScheduledTask, agentName: string, session: string, now: number): boolean {
+  let result: import('node:child_process').SpawnSyncReturns<string>
+  try {
+    result = spawnSync('/bin/bash', [MEM_GATE_SCRIPT_PATH, '--min-avail'], { timeout: 5000, encoding: 'utf-8' })
+  } catch (err) {
+    logger.debug({ err, task: task.name, agent: agentName }, 'low-memory gate: spawn threw, failing open (injecting)')
+    return false
+  }
+  // Fail-open on anything but the documented block code: a missing script, a
+  // timeout (SIGTERM -> result.signal set, status null), or any other
+  // non-10 exit all mean "do not know, so do not hold back the scheduler".
+  if (result.error || result.status !== 10) {
+    if (result.error) logger.debug({ err: result.error, task: task.name, agent: agentName }, 'low-memory gate: spawn errored, failing open (injecting)')
+    return false
+  }
+  logger.warn(
+    { task: task.name, agent: agentName, session, out: (result.stdout ?? '').trim() },
+    'low-memory gate: MemAvailable below threshold, NOT injecting the scheduled prompt',
+  )
+  if (now - lastLowMemoryNoticeAtMs >= LOW_MEMORY_NOTICE_COOLDOWN_MS) {
+    lastLowMemoryNoticeAtMs = now
+    const text = [
+      `[scheduler] Alacsony memória miatt kihagytam egy ütemezett prompt injektálását: "${task.name}" (${agentName}/${session}).`,
+      (result.stdout ?? '').trim(),
+      'A feladat a várakozási sorba kerül, és a következő tick(ek)en újrapróbálkozik, amint a memória felszabadul. Legfeljebb 30 percenként egy ilyen üzenetet küldök.',
+    ].filter(Boolean).join('\n')
+    try {
+      createAgentMessage('system', MAIN_AGENT_ID, text)
+    } catch (err) {
+      logger.warn({ err, task: task.name, agent: agentName }, 'low-memory gate: owner notice failed')
+    }
+  }
+  return true
+}
+
 function mcpMissingReason(taskName: string, agentName: string): string {
   const missing = lastMcpMissing.get(`${taskName}@${agentName}`) ?? []
   return missing.length ? `mcp-missing:${missing.join(',')}` : 'mcp-missing'
@@ -2092,7 +2147,7 @@ async function attemptFireTask(
   preCheckPrefix?: string,
   lateCatchUpMs?: number,
   occurrence?: ScheduledOccurrence,
-): Promise<'fired' | 'busy' | 'missing' | 'starting' | 'error' | 'mcp-missing' | 'first-run' | 'respawning' | 'usage-limited'> {
+): Promise<'fired' | 'busy' | 'missing' | 'starting' | 'error' | 'mcp-missing' | 'first-run' | 'respawning' | 'usage-limited' | 'low-memory'> {
   // OWNEREXEC1109: an override that names no fleet session is never sent (see allowedTargetSessions).
   if (targetSessionRefused(task)) {
     logger.error({ task: task.name, agent: agentName, targetSession: task.targetSession }, 'schedule-runner: targetSession is not a fleet session; prompt NOT sent')
@@ -2120,6 +2175,12 @@ async function attemptFireTask(
   // report false while the restart is only half done (see restart-lock.ts).
   // 'busy' is the honest answer: the normal retry path delivers once it is over.
   if (isRestartInFlight(agentName)) return 'busy'
+
+  // Low-memory gate, Part 2 of card 9b6e4e6e: checked BEFORE the auto-start
+  // branch below (a down agent woken just to receive THIS prompt is itself a
+  // new process the host may not have room for) and before injecting into an
+  // already-running session further down -- the two cases the plan named.
+  if (host == null && lowMemoryHoldsInjection(task, agentName, session, now)) return 'low-memory'
 
   if (!sessionExistsOnHost(host, session)) {
     // The main channels session is service-managed (systemd/launchd via
@@ -2831,8 +2892,9 @@ export async function runScheduledTaskNow(
     // redundant cron ticks, but an explicit run-now must not be dropped.
     // 'usage-limited' is queued the same way: the retry loop goes through the
     // same usage-limit gate, so it is delivered by the gate's next probe or as
-    // soon as the banner is gone.
-    if (result === 'starting' || result === 'busy' || result === 'mcp-missing' || result === 'first-run' || result === 'respawning' || result === 'usage-limited') {
+    // soon as the banner is gone. 'low-memory' the same, against the memory
+    // gate instead.
+    if (result === 'starting' || result === 'busy' || result === 'mcp-missing' || result === 'first-run' || result === 'respawning' || result === 'usage-limited' || result === 'low-memory') {
       const reason = result === 'mcp-missing' ? mcpMissingReason(task.name, agentName) : result
       insertPendingTaskRetryIfNew(task.name, agentName, now, reason)
     }
@@ -4089,6 +4151,22 @@ export function startScheduleRunner(): NodeJS.Timeout {
           // trace. The retry row keeps it alive and the aged alert names the
           // actual blocker instead of a generic "busy".
           insertPendingTaskRetryIfNew(task.name, agentName, now, 'first-run')
+        } else if (result === 'low-memory') {
+          if (current.skipIfBusy && !current.forceSend) {
+            // Short-cadence task: same rationale as 'busy'/'usage-limited'
+            // above -- recorded, not queued. The next tick is already on the
+            // way and re-checks the gate on its own; the gate itself has
+            // already sent (at most) one owner notice for this episode.
+            scheduleLastRun.set(task.name, now)
+            persistScheduleLastRun()
+            appendTaskRun(task.name, agentName, 'skipped-low-memory')
+          } else {
+            // Daily/weekly task: queued like 'usage-limited'. The retry loop
+            // re-evaluates the memory gate on its own next attempt, so the
+            // occurrence lands as soon as MemAvailable recovers instead of
+            // being lost for the day.
+            insertPendingTaskRetryIfNew(task.name, agentName, now, 'low-memory')
+          }
         }
       }
     }
