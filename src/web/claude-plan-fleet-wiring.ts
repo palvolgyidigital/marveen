@@ -14,6 +14,7 @@ import { resolveAgentConfigDir } from './claude-plans.js'
 import { readClaudePlansState, writeClaudePlansState, recordFleetRotation, type FleetRotationRecord } from './claude-plans-state.js'
 import { listAllAgentNames, readAgentModel, readAgentAuthMode, readAgentRemoteHost } from './agent-config.js'
 import { FLEET_OAUTH_TOKEN_PATH, isAgentRunning, restartAgentProcess } from './agent-process.js'
+import { logIfHardMemoryBand } from './memory-band-warn.js'
 import { resolveOpenRouterModel } from './openrouter-models.js'
 import { getSecret } from './vault.js'
 import { agentTokenFileState } from './reauth-healer.js'
@@ -47,7 +48,10 @@ export async function runFleetLeg(target: ClaudePlan): Promise<FleetRotationReco
       usesFleetToken,
       isRunning: isAgentRunning,
       // RESTARTWAKE927: the fleet leg restarts every running shared-token agent, busy or not.
-      restart: (name) => restartAgentProcess(name, { wake: { reason: 'fleet-plan-switch' } }),
+      // Card 9b6e4e6e, Part 2: warn-only, never blocks (default classification,
+      // msg 7153 did not name this site explicitly but its 3 siblings are all
+      // recovery/managed-switch restarts of the same shape).
+      restart: (name) => { logIfHardMemoryBand('claude-plan-fleet-wiring.restart', { agent: name }); return restartAgentProcess(name, { wake: { reason: 'fleet-plan-switch' } }) },
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       nowMs: () => Date.now(),
     })

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, PROJECT_ROOT, RESPAWN_ENABLED, APP_TZ } from '../config.js'
+import { logIfHardMemoryBand } from './memory-band-warn.js'
 import { resolveFromPath } from '../platform.js'
 import { agentConfigRoot, listAgentNames } from './agent-config.js'
 import { resolveOauthTokenFileSetting } from './agent-oauth-token-file.js'
@@ -547,6 +548,8 @@ async function restartFirstRunGatedAgent(name: string, session: string): Promise
     execFile(TMUX, ['kill-session', '-t', exactTmuxTarget(session)], { timeout: 5000 }, () => resolve())
   })
   await sleep(1000)
+  // Card 9b6e4e6e, Part 2: warn-only, never blocks (Pedro msg 7153 approval).
+  logIfHardMemoryBand('reauth-healer.firstRunGateRelaunch', { agent: name })
   try {
     const r = await startAgentProcess(name)
     if (!r.ok) logger.warn({ name, error: r.error }, 'reauth-healer: first-run-gate relaunch failed')
