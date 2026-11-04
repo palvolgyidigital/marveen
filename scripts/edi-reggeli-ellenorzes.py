@@ -140,7 +140,7 @@ def main() -> int:
         bizonytalan.append(hiba)
     latott, hianyzo = futas_lefedettseg(sorok, hatar)
     if hianyzo and not hiba:
-        baj.append("Kimaradt betoltesi ora: "
+        baj.append("Kimaradt betöltési óra: "
                    + ", ".join(t.astimezone(TZ).strftime("%m-%d %H:00") for t in hianyzo))
 
     hibasorok, hiba2 = olvas(HIBA)
@@ -151,15 +151,15 @@ def main() -> int:
         kor = dt.datetime.fromtimestamp(os.path.getmtime(HIBA), dt.timezone.utc)
         friss_hiba = kor >= hatar and bool([s for s in hibasorok if s.strip()])
         if friss_hiba:
-            baj.append("A betolto hibanaploja frissult: "
+            baj.append("A betöltő hibanaplója frissült: "
                        + kor.astimezone(TZ).strftime("%m-%d %H:%M")
-                       + " -- utolso sor: " + (hibasorok[-1][:120] if hibasorok else ""))
+                       + ", utolsó sor: " + (hibasorok[-1][:120] if hibasorok else ""))
 
     elakadt, utolso = elakadt_statuszok(sorok, hatar)
     tartos = {k: v for k, v in elakadt.items() if v > 1}
     if tartos:
-        baj.append("Tobb futason at fuggoben maradt statuszvaltas: "
-                   + ", ".join(f"{k} ({v} futas)" for k, v in sorted(tartos.items())))
+        baj.append("Több futáson át függőben maradt státuszváltás: "
+                   + ", ".join(f"{k} ({v} futás)" for k, v in sorted(tartos.items())))
 
     fuggo = varakozo = None
     sam_allapot_ideje = None
@@ -203,10 +203,10 @@ def main() -> int:
         # 07:00 utan a mai allapot MEGLETE a helyes elvaras, nem egy 30 oras ablak.
         mai_hatar = ma_kezdet().replace(hour=6)
         if most().astimezone(TZ) >= ma_kezdet().replace(hour=7) and sam_allapot_ideje < mai_hatar:
-            baj.append("A Relex-osszevetes allapota NEM a mai futasbol van ("
+            baj.append("A Relex-összevetés állapota NEM a mai futásból van ("
                        + sam_allapot_ideje.strftime("%m-%d %H:%M")
-                       + "), tehat a napi 06:00-s ellenorzes a riport elott nem futott le. "
-                       + "A lenti Relex-szamok ennek a korabbi napnak az allapotat tukrozik.")
+                       + "), tehát a napi 06:00-s ellenőrzés a riport előtt nem futott le. "
+                       + "A lenti Relex-számok ennek a korábbi napnak az állapotát tükrözik.")
     except Exception as exc:  # noqa: BLE001
         bizonytalan.append(f"Sam allapotfajlja nem olvashato: {exc!r}")
 
