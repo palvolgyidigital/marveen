@@ -24113,6 +24113,11 @@ async function loadPartnersPage() {
   // [hidden] alapertelmezett display:none-jat. Ugyanaz a cascade-csapda, amit a
   // style.css a kanban-oszlopoknal kulon kommenttel jelol.
   if (szurok) szurok.style.display = 'flex'
+  // A Magánvásárlók fül nem partner-tipus a szerveren: kulon forrasbol jon (Marci
+  // kerese, 2026-11-03), ezert itt agazik le, mielott egy ismeretlen type=-t kuldenenk.
+  const felelosSel = document.getElementById('partnerAssigneeFilter')
+  if (felelosSel) felelosSel.style.display = _partnerType === 'maganvasarlo' ? 'none' : ''
+  if (_partnerType === 'maganvasarlo') return loadMaganvasarlok()
   lista.innerHTML = '<p class="subtitle">Betöltés...</p>'
   const qs = new URLSearchParams()
   if (_partnerType) qs.set('type', _partnerType)
@@ -24144,6 +24149,154 @@ async function loadPartnersPage() {
       ${_partnerColumn('Nincs nyitott feladat', nincsDolog, 'none')}
     </div>`
 }
+
+// ---- Maganvasarlok (Marci kerese, 2026-11-03, Telegram 11607/11610) ----
+// Csak a hirlevelre feliratkozott maganvasarlok. A lista forrasa Sam webshop-
+// lekerdezese, a szerkesztes CSAK a dashboardon el (a webshopba nem ir vissza).
+let _mvAdat = []
+const _mvNyitott = new Set()
+
+function _mvFt(n) {
+  const v = Number(n)
+  return Number.isFinite(v) ? v.toLocaleString('hu-HU') + ' Ft' : '-'
+}
+
+function _mvRendelesekHtml(v) {
+  const r = Array.isArray(v.rendelesek) ? v.rendelesek : []
+  if (!r.length) return '<div class="mv-empty">Nincs rendelés a forrásban.</div>'
+  return r.map(o => {
+    const tetelek = Array.isArray(o.tetelek) ? o.tetelek : []
+    return `<div class="mv-order">
+      <div class="mv-order-head">
+        <span>${escapeHtml(String(o.datum || ''))}</span>
+        <span class="mv-muted">${escapeHtml(String(o.rendelesszam || ''))}</span>
+        ${o.kuponkod ? `<span class="mv-muted">kupon: ${escapeHtml(String(o.kuponkod))}</span>` : ''}
+        <span class="mv-total">${_mvFt(o.vegosszeg_brutto_huf)}</span>
+      </div>
+      <ul class="mv-items">${tetelek.map(t =>
+        `<li>${escapeHtml(String(t.darab ?? ''))} db &middot; ${escapeHtml(String(t.termeknev || ''))} <span class="mv-muted">${escapeHtml(String(t.cikkszam || ''))}</span></li>`
+      ).join('')}</ul>
+    </div>`
+  }).join('')
+}
+
+// A rendeles datuma "2025.05.09 09:18:50", a levele ISO: mindkettot ÉÉÉÉ-HH-NN-re hozzuk.
+function _mvNap(s) {
+  const m = String(s || '').match(/(\d{4})[.-](\d{2})[.-](\d{2})/)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : ''
+}
+
+// Marci, 2026-11-03 (Telegram 11624): "hogy mikor rendelte meg a level utan, tok mindegy.
+// A lenyeg, hogy megrendelje valamikor." Ezert az ELSO level utani BARMELY rendeles szamit.
+function _mvLevelOszlopok(v) {
+  const lev = Array.isArray(v.levelek) ? v.levelek : []
+  if (!lev.length) return { level: '<span class="mv-muted">nem kapott</span>', utana: '<span class="mv-muted">-</span>' }
+  const utolso = lev[0]
+  const elso = _mvNap(lev[lev.length - 1].datum)
+  const utaniak = (v.rendelesek || []).filter(o => _mvNap(o.datum) > elso)
+  const level = `${escapeHtml(_mvNap(utolso.datum))}<div class="mv-muted mv-small">${escapeHtml(utolso.targy || '')}${lev.length > 1 ? ` (összesen ${lev.length} levél)` : ''}</div>`
+  // A kupon a legbiztosabb jel, hogy a level hozta a rendelest (Sam: a UNAS Coupon mezoje).
+  const kuponok = [...new Set(utaniak.map(o => o.kuponkod).filter(Boolean))]
+  const utana = utaniak.length
+    ? `<span class="mv-yes">igen</span><div class="mv-muted mv-small">${utaniak.length} rendelés, ${_mvFt(utaniak.reduce((a, o) => a + (Number(o.vegosszeg_brutto_huf) || 0), 0))}</div>` +
+      (kuponok.length ? `<div class="mv-small"><span class="mv-yes">kuponnal:</span> ${escapeHtml(kuponok.join(', '))}</div>` : '')
+    : '<span class="mv-no">nem</span>'
+  return { level, utana }
+}
+
+function _mvSorHtml(v) {
+  const r = Array.isArray(v.rendelesek) ? v.rendelesek : []
+  const ossz = r.reduce((a, o) => a + (Number(o.vegosszeg_brutto_huf) || 0), 0)
+  const lo = _mvLevelOszlopok(v)
+  const k = escapeHtml(v.kulcs)
+  const jel = f => (v.szerkesztett || []).includes(f) ? ' mv-edited' : ''
+  const nyitva = _mvNyitott.has(v.kulcs)
+  return `<tr class="mv-row" data-kulcs="${k}">
+      <td><input class="input mv-input${jel('nev')}" data-field="nev" value="${escapeHtml(v.nev || '')}" title="${(v.szerkesztett || []).includes('nev') ? 'Szerkesztve, eredeti: ' + escapeHtml(v.eredeti?.nev || '') : ''}"></td>
+      <td><input class="input mv-input${jel('email')}" data-field="email" value="${escapeHtml(v.email || '')}" title="${(v.szerkesztett || []).includes('email') ? 'Szerkesztve, eredeti: ' + escapeHtml(v.eredeti?.email || '') : ''}"></td>
+      <td>${escapeHtml(String(v.utolso_rendeles_datuma || '-'))}</td>
+      <td><button class="btn-secondary btn-compact" onclick="mvToggle('${k}')">${r.length} rendelés &middot; ${_mvFt(ossz)} ${nyitva ? '&#9650;' : '&#9660;'}</button></td>
+      <td>${lo.level}</td>
+      <td>${lo.utana}</td>
+      <td><input class="input mv-input${jel('megjegyzes')}" data-field="megjegyzes" value="${escapeHtml(v.megjegyzes || '')}" placeholder="Megjegyzés"></td>
+    </tr>
+    ${nyitva ? `<tr class="mv-detail"><td colspan="7">${_mvRendelesekHtml(v)}</td></tr>` : ''}`
+}
+
+function _mvRender() {
+  const lista = document.getElementById('partnersList')
+  if (!lista) return
+  const q = (_partnerQuery || '').trim().toLowerCase()
+  const sorok = _mvAdat.filter(v => !q ||
+    [v.nev, v.email, v.megjegyzes].some(x => String(x || '').toLowerCase().includes(q)) ||
+    (v.rendelesek || []).some(o => (o.tetelek || []).some(t => String(t.termeknev || '').toLowerCase().includes(q))))
+  lista.innerHTML = `<div class="mv-wrap"><table class="mv-table">
+      <thead><tr><th>Név</th><th>Email</th><th>Utolsó rendelés</th><th>Rendelések</th><th>Utolsó személyes levél</th><th>Rendelt a levél után</th><th>Megjegyzés</th></tr></thead>
+      <tbody>${sorok.length ? sorok.map(_mvSorHtml).join('') : '<tr><td colspan="7" class="mv-empty">Nincs találat.</td></tr>'}</tbody>
+    </table>
+    <p class="mv-muted mv-foot">A módosítás csak a dashboardon marad meg, a webshopba nem íródik vissza. Szerkesztett mező: sárga szegély, az eredeti érték a mezőre mutatva látszik.</p></div>`
+}
+
+async function loadMaganvasarlok() {
+  const lista = document.getElementById('partnersList')
+  const sub = document.getElementById('partnersSubtitle')
+  lista.innerHTML = '<p class="subtitle">Betöltés...</p>'
+  let d
+  try {
+    const r = await fetch('/api/partners/maganvasarlok')
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    d = await r.json()
+  } catch (e) {
+    lista.innerHTML = `<p class="subtitle">A magánvásárlók lekérése nem sikerült (${escapeHtml(String(e.message || e))}). Ez nem azt jelenti, hogy nincs feliratkozó.</p>`
+    return
+  }
+  if (d.forras === 'hianyzik') {
+    sub.textContent = 'Magánvásárlók'
+    lista.innerHTML = '<p class="subtitle">Az adatforrás még nem készült el (Sam webshop-lekérdezése). Ez nem azt jelenti, hogy nincs feliratkozó.</p>'
+    return
+  }
+  _mvAdat = (d.vasarlok || []).slice().sort((a, b) =>
+    String(b.utolso_rendeles_datuma || '').localeCompare(String(a.utolso_rendeles_datuma || '')) ||
+    String(a.nev || '').localeCompare(String(b.nev || ''), 'hu'))
+  const fr = d.frissitve ? new Date(d.frissitve * 1000).toLocaleString('hu-HU') : '-'
+  sub.innerHTML = `${_mvAdat.length} feliratkozott magánvásárló &middot; adat frissítve: ${escapeHtml(fr)}`
+  _mvRender()
+}
+
+function mvToggle(kulcs) {
+  if (_mvNyitott.has(kulcs)) _mvNyitott.delete(kulcs); else _mvNyitott.add(kulcs)
+  _mvRender()
+}
+
+document.getElementById('partnersList')?.addEventListener('change', async (e) => {
+  const inp = e.target.closest('.mv-input')
+  if (!inp) return
+  const sor = inp.closest('tr[data-kulcs]')
+  const kulcs = sor?.dataset.kulcs
+  const field = inp.dataset.field
+  if (!kulcs || !field) return
+  const v = _mvAdat.find(x => x.kulcs === kulcs)
+  const ertek = inp.value.trim()
+  // Ures nev/email = vissza az eredetire (null), a megjegyzes viszont lehet ures.
+  const kuld = (field !== 'megjegyzes' && !ertek) ? null : ertek
+  try {
+    const r = await fetch(`/api/partners/maganvasarlok/${encodeURIComponent(kulcs)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: kuld }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status))
+    if (v) {
+      v[field] = kuld === null ? (v.eredeti?.[field] || '') : kuld
+      const sz = new Set(v.szerkesztett || [])
+      if (kuld === null) sz.delete(field); else sz.add(field)
+      v.szerkesztett = [...sz]
+    }
+    _mvRender()
+  } catch (err) {
+    inp.classList.add('mv-error')
+    inp.title = 'Mentés nem sikerült: ' + String(err.message || err)
+  }
+})
 
 // Aruhaz-kimutatas gomb (David kerese, 2026-10-14). A gomb CSAK ott latszik, ahol a
 // partner note-jaban van IDP SAP-kod: az a 43 MediaMarkt aruhaz, es a kod maga az

@@ -8886,3 +8886,23 @@ body {
 .pn-item.is-done .pn-valasz { opacity: 0.75; }
 .pn-valasz-szerk { margin-top: 8px; }
 .pn-lepes-sor .pn-valasz { font-size: 12px; }
+
+/* ---- Maganvasarlok (Marci kerese, 2026-11-03) ------------------------- */
+.mv-wrap { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow-x: auto; }
+.mv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mv-table th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.mv-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.mv-input { width: 100%; min-width: 140px; font-size: 13px; }
+.mv-input.mv-edited { border-color: #d9a441; }
+.mv-input.mv-error { border-color: #d9534f; }
+.mv-detail td { background: var(--bg-input); }
+.mv-order { margin: 4px 0 10px; }
+.mv-order-head { display: flex; gap: 14px; font-weight: 600; }
+.mv-total { margin-left: auto; }
+.mv-items { margin: 4px 0 0 18px; padding: 0; }
+.mv-muted { color: var(--text-muted); font-weight: 400; }
+.mv-empty { color: var(--text-muted); padding: 8px; }
+.mv-foot { font-size: 12px; margin: 10px 2px 0; }
+.mv-small { font-size: 11px; margin-top: 2px; }
+.mv-yes { color: #4caf7d; font-weight: 600; }
+.mv-no { color: var(--text-muted); }
