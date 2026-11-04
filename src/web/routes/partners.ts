@@ -7,6 +7,9 @@ import {
   deleteKanbanCard, revertIdeaFromKanban, listKanbanAttachmentsForCards,
 } from '../../db.js'
 import { execFile } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { STORE_DIR } from '../../config.js'
 import { readBody, json } from '../http-helpers.js'
 import { torolKartyaCsatolmanyFajljait } from '../kanban-csatolmany.js'
 import type { RouteContext } from './types.js'
@@ -141,8 +144,102 @@ function parseDue(v: unknown): number | null | undefined {
   return undefined
 }
 
+/**
+ * MAGANVASARLOK (private customers who subscribed to the newsletter). Marci's request,
+ * 2026-11-03 (Telegram 11607 and 11610): a separate tab under Partners, showing name,
+ * email, last order date and what they ordered at what total. Editing is wanted, but
+ * ONLY inside the dashboard ("Csak a dashboardban eleg a szerkesztes"), never written
+ * back to the webshop.
+ *
+ * Two files, on purpose. The source list (feliratkozok.json) is rebuilt by Sam from the
+ * webshop; the edits (szerkesztesek.json) are ours. If edits lived in the source file,
+ * the next rebuild would silently wipe them. The merge happens at read time, and the
+ * response says which fields were edited so the UI can show it.
+ */
+const MV_DIR = join(STORE_DIR, 'maganvasarlok')
+const MV_SOURCE = join(MV_DIR, 'feliratkozok.json')
+const MV_EDITS = join(MV_DIR, 'szerkesztesek.json')
+const MV_LETTERS = join(MV_DIR, 'levelek.json')
+const MV_FIELDS = ['nev', 'email', 'megjegyzes'] as const
+type MvField = typeof MV_FIELDS[number]
+
+function mvKey(v: Record<string, unknown>): string {
+  const id = v.unas_customer_id
+  if (id !== undefined && id !== null && String(id).trim()) return 'u:' + String(id).trim()
+  return 'e:' + String(v.email ?? '').trim().toLowerCase()
+}
+
+function mvReadEdits(): Record<string, Partial<Record<MvField, string>> & { modositva?: number }> {
+  if (!existsSync(MV_EDITS)) return {}
+  return JSON.parse(readFileSync(MV_EDITS, 'utf8'))
+}
+
+async function tryHandleMaganvasarlok(ctx: RouteContext): Promise<boolean> {
+  const { res, req, path, method } = ctx
+  if (path === '/api/partners/maganvasarlok' && method === 'GET') {
+    // A missing source file is NOT an empty list: say which one it is.
+    if (!existsSync(MV_SOURCE)) { json(res, { vasarlok: [], forras: 'hianyzik' }); return true }
+    const raw = JSON.parse(readFileSync(MV_SOURCE, 'utf8')) as unknown
+    const lista = (Array.isArray(raw) ? raw : (raw as { vasarlok?: unknown[] }).vasarlok ?? []) as Record<string, unknown>[]
+    const edits = mvReadEdits()
+    // Our own cross-sell letters per recipient (scripts/maganvasarlok-levelek.py). Keyed by
+    // the ORIGINAL webshop address, not an edited one: the letters went to that address.
+    const levelek: Record<string, unknown[]> = existsSync(MV_LETTERS)
+      ? (JSON.parse(readFileSync(MV_LETTERS, 'utf8')).levelek ?? {}) : {}
+    const vasarlok = lista.map(v => {
+      const key = mvKey(v)
+      const e = edits[key] ?? {}
+      const szerkesztett = MV_FIELDS.filter(f => e[f] !== undefined)
+      return {
+        ...v,
+        kulcs: key,
+        nev: e.nev ?? v.nev ?? '',
+        email: e.email ?? v.email ?? '',
+        megjegyzes: e.megjegyzes ?? '',
+        eredeti: { nev: v.nev ?? '', email: v.email ?? '' },
+        szerkesztett,
+        levelek: levelek[String(v.email ?? '').trim().toLowerCase()] ?? [],
+      }
+    })
+    json(res, {
+      vasarlok, forras: 'ok', frissitve: Math.floor(statSync(MV_SOURCE).mtimeMs / 1000),
+      levelek_frissitve: existsSync(MV_LETTERS) ? Math.floor(statSync(MV_LETTERS).mtimeMs / 1000) : null,
+    })
+    return true
+  }
+  const m = path.match(/^\/api\/partners\/maganvasarlok\/([^/]+)$/)
+  if (m && method === 'PUT') {
+    const key = decodeURIComponent(m[1])
+    if (!/^[ue]:.+/.test(key)) { json(res, { error: 'bad key' }, 400); return true }
+    const data = JSON.parse((await readBody(req)).toString()) as Record<string, unknown>
+    const edits = mvReadEdits()
+    const cur = { ...(edits[key] ?? {}) }
+    for (const f of MV_FIELDS) {
+      if (data[f] === undefined) continue
+      if (data[f] === null) { delete cur[f]; continue }   // null = vissza az eredetire
+      if (typeof data[f] !== 'string') { json(res, { error: `${f} must be a string` }, 400); return true }
+      const v = (data[f] as string).trim()
+      if (f === 'email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+        json(res, { error: 'invalid email' }, 400); return true
+      }
+      cur[f] = v
+    }
+    cur.modositva = nowSec()
+    edits[key] = cur
+    mkdirSync(MV_DIR, { recursive: true })
+    const tmp = MV_EDITS + '.tmp'
+    writeFileSync(tmp, JSON.stringify(edits, null, 2))
+    renameSync(tmp, MV_EDITS)
+    json(res, { ok: true, kulcs: key, szerkesztes: cur })
+    return true
+  }
+  return false
+}
+
 export async function tryHandlePartners(ctx: RouteContext): Promise<boolean> {
   const { res, req, path, method, url } = ctx
+  // Before the generic /api/partners/<id> matchers, which would read "maganvasarlok" as an id.
+  if (path.startsWith('/api/partners/maganvasarlok') && await tryHandleMaganvasarlok(ctx)) return true
 
   // --- list ---------------------------------------------------------------
   if (path === '/api/partners' && method === 'GET') {
