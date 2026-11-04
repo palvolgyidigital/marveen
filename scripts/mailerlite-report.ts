@@ -37,6 +37,9 @@
 //   tsx scripts/mailerlite-report.ts campaigns [--status sent|draft] [--limit N]
 //   tsx scripts/mailerlite-report.ts stats --id <campaignId>
 //   tsx scripts/mailerlite-report.ts kuldesi-ido [--limit N]   # send hour vs open rate
+//   tsx scripts/mailerlite-report.ts groups                    # group ids and active counts
+//   tsx scripts/mailerlite-report.ts subscribers [--group <id>] [--out <path>]
+//     # active subscribers, all fields, to a chmod-600 JSON file (personal data: not printed)
 //
 // Credentials: agents/marti/.mailerlite-credentials (MAILERLITE_API_KEY), chmod 600.
 // Override the path with MAILERLITE_CREDS.
@@ -131,7 +134,46 @@ async function main() {
     return
   }
 
-  console.error('usage: mailerlite-report.ts <campaigns|stats|kuldesi-ido> [options] (see file header)')
+  // Groups, so the subscriber export below can be narrowed to one of them by id.
+  if (verb === 'groups') {
+    const d = await olvas('/api/groups', { limit: '100' })
+    for (const g of d.data ?? []) console.log(`${g.id}  aktiv ${g.active_count ?? '?'}  ${g.name}`)
+    return
+  }
+
+  // SUBSCRIBER EXPORT (2026-11-04, Marci kérése Martin keresztül, a Google Ads Customer
+  // Match feltöltéshez). Same read-only scope as the rest of this file: subscriber lists
+  // were part of the 2026-07-23 approval. Personal data, so it does NOT go to stdout:
+  // the full rows are written to a chmod-600 file, and the terminal only gets counts and
+  // which fields are filled. Cursor pagination until MailerLite says there is no next page.
+  if (verb === 'subscribers') {
+    const group = flag('group')
+    if (group !== undefined && !/^\d+$/.test(group)) { console.error('--group must be digits'); process.exit(2) }
+    const out = flag('out') ?? '/home/pdb/marveen/agents/marti/store/mailerlite-subscribers.json'
+    const path = group ? `/api/groups/${group}/subscribers` : '/api/subscribers'
+    const rows: any[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 200; page++) {
+      const p: Record<string, string> = { limit: '1000', 'filter[status]': 'active' }
+      if (cursor) p.cursor = cursor
+      const d = await olvas(path, p)
+      rows.push(...(d.data ?? []))
+      cursor = d.meta?.next_cursor ?? undefined
+      if (!cursor) break
+    }
+    const { writeFileSync, chmodSync, mkdirSync } = await import('node:fs')
+    const { dirname } = await import('node:path')
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, JSON.stringify(rows, null, 1), { mode: 0o600 })
+    chmodSync(out, 0o600)
+    const filled: Record<string, number> = {}
+    for (const r of rows) for (const [k, v] of Object.entries(r.fields ?? {})) if (v !== null && v !== '') filled[k] = (filled[k] ?? 0) + 1
+    console.log(`${rows.length} aktiv feliratkozo${group ? ` (csoport ${group})` : ''} -> ${out} (chmod 600)`)
+    console.log('kitoltott mezok (fields.*): ' + (Object.entries(filled).map(([k, n]) => `${k} ${n}`).join(', ') || 'egyik sem'))
+    return
+  }
+
+  console.error('usage: mailerlite-report.ts <campaigns|stats|kuldesi-ido|groups|subscribers> [options] (see file header)')
   process.exit(2)
 }
 main()
