@@ -24158,7 +24158,7 @@ const _mvNyitott = new Set()
 
 function _mvFt(n) {
   const v = Number(n)
-  return Number.isFinite(v) ? v.toLocaleString('hu-HU') + ' Ft' : '-'
+  return Number.isFinite(v) ? escapeHtml(v.toLocaleString('hu-HU') + ' Ft') : '-'
 }
 
 function _mvRendelesekHtml(v) {
@@ -24188,26 +24188,32 @@ function _mvNap(s) {
 
 // Marci, 2026-11-03 (Telegram 11624): "hogy mikor rendelte meg a level utan, tok mindegy.
 // A lenyeg, hogy megrendelje valamikor." Ezert az ELSO level utani BARMELY rendeles szamit.
-function _mvLevelOszlopok(v) {
+function _mvLevelek(v) {
   const lev = Array.isArray(v.levelek) ? v.levelek : []
-  if (!lev.length) return { level: '<span class="mv-muted">nem kapott</span>', utana: '<span class="mv-muted">-</span>' }
+  const elso = lev.length ? _mvNap(lev[lev.length - 1].datum) : ''
+  const utaniak = lev.length ? (v.rendelesek || []).filter(o => _mvNap(o.datum) > elso) : []
+  return { lev, utaniak }
+}
+
+function _mvLevelCella(v) {
+  const { lev } = _mvLevelek(v)
+  if (!lev.length) return '<span class="mv-muted">nem kapott</span>'
   const utolso = lev[0]
-  const elso = _mvNap(lev[lev.length - 1].datum)
-  const utaniak = (v.rendelesek || []).filter(o => _mvNap(o.datum) > elso)
-  const level = `${escapeHtml(_mvNap(utolso.datum))}<div class="mv-muted mv-small">${escapeHtml(utolso.targy || '')}${lev.length > 1 ? ` (összesen ${lev.length} levél)` : ''}</div>`
-  // A kupon a legbiztosabb jel, hogy a level hozta a rendelest (Sam: a UNAS Coupon mezoje).
+  return `${escapeHtml(_mvNap(utolso.datum))}<div class="mv-muted mv-small">${escapeHtml(utolso.targy || '')}${lev.length > 1 ? ` (összesen ${escapeHtml(String(lev.length))} levél)` : ''}</div>`
+}
+
+// A kupon a legbiztosabb jel, hogy a level hozta a rendelest (Sam: a UNAS Coupon mezoje).
+function _mvUtanaCella(v) {
+  const { lev, utaniak } = _mvLevelek(v)
+  if (!lev.length) return '<span class="mv-muted">-</span>'
+  if (!utaniak.length) return '<span class="mv-no">nem</span>'
   const kuponok = [...new Set(utaniak.map(o => o.kuponkod).filter(Boolean))]
-  const utana = utaniak.length
-    ? `<span class="mv-yes">igen</span><div class="mv-muted mv-small">${utaniak.length} rendelés, ${_mvFt(utaniak.reduce((a, o) => a + (Number(o.vegosszeg_brutto_huf) || 0), 0))}</div>` +
-      (kuponok.length ? `<div class="mv-small"><span class="mv-yes">kuponnal:</span> ${escapeHtml(kuponok.join(', '))}</div>` : '')
-    : '<span class="mv-no">nem</span>'
-  return { level, utana }
+  return `<span class="mv-yes">igen</span><div class="mv-muted mv-small">${escapeHtml(String(utaniak.length))} rendelés, ${_mvFt(utaniak.reduce((a, o) => a + (Number(o.vegosszeg_brutto_huf) || 0), 0))}</div>${kuponok.length ? `<div class="mv-small"><span class="mv-yes">kuponnal:</span> ${escapeHtml(kuponok.join(', '))}</div>` : ''}`
 }
 
 function _mvSorHtml(v) {
   const r = Array.isArray(v.rendelesek) ? v.rendelesek : []
   const ossz = r.reduce((a, o) => a + (Number(o.vegosszeg_brutto_huf) || 0), 0)
-  const lo = _mvLevelOszlopok(v)
   const k = escapeHtml(v.kulcs)
   const jel = f => (v.szerkesztett || []).includes(f) ? ' mv-edited' : ''
   const nyitva = _mvNyitott.has(v.kulcs)
@@ -24215,9 +24221,9 @@ function _mvSorHtml(v) {
       <td><input class="input mv-input${jel('nev')}" data-field="nev" value="${escapeHtml(v.nev || '')}" title="${(v.szerkesztett || []).includes('nev') ? 'Szerkesztve, eredeti: ' + escapeHtml(v.eredeti?.nev || '') : ''}"></td>
       <td><input class="input mv-input${jel('email')}" data-field="email" value="${escapeHtml(v.email || '')}" title="${(v.szerkesztett || []).includes('email') ? 'Szerkesztve, eredeti: ' + escapeHtml(v.eredeti?.email || '') : ''}"></td>
       <td>${escapeHtml(String(v.utolso_rendeles_datuma || '-'))}</td>
-      <td><button class="btn-secondary btn-compact" onclick="mvToggle('${k}')">${r.length} rendelés &middot; ${_mvFt(ossz)} ${nyitva ? '&#9650;' : '&#9660;'}</button></td>
-      <td>${lo.level}</td>
-      <td>${lo.utana}</td>
+      <td><button class="btn-secondary btn-compact" onclick="mvToggle(${jsArg(v.kulcs)})">${escapeHtml(String(r.length))} rendelés &middot; ${_mvFt(ossz)} ${nyitva ? '&#9650;' : '&#9660;'}</button></td>
+      <td>${_mvLevelCella(v)}</td>
+      <td>${_mvUtanaCella(v)}</td>
       <td><input class="input mv-input${jel('megjegyzes')}" data-field="megjegyzes" value="${escapeHtml(v.megjegyzes || '')}" placeholder="Megjegyzés"></td>
     </tr>
     ${nyitva ? `<tr class="mv-detail"><td colspan="7">${_mvRendelesekHtml(v)}</td></tr>` : ''}`
@@ -24259,7 +24265,7 @@ async function loadMaganvasarlok() {
     String(b.utolso_rendeles_datuma || '').localeCompare(String(a.utolso_rendeles_datuma || '')) ||
     String(a.nev || '').localeCompare(String(b.nev || ''), 'hu'))
   const fr = d.frissitve ? new Date(d.frissitve * 1000).toLocaleString('hu-HU') : '-'
-  sub.innerHTML = `${_mvAdat.length} feliratkozott magánvásárló &middot; adat frissítve: ${escapeHtml(fr)}`
+  sub.innerHTML = `${escapeHtml(String(_mvAdat.length))} feliratkozott magánvásárló &middot; adat frissítve: ${escapeHtml(fr)}`
   _mvRender()
 }
 
