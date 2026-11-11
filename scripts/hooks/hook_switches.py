@@ -53,6 +53,10 @@ DEFAULT_NON_DISABLEABLE = frozenset({
     "email-approval-gate",      # level-aware email approval (main agent)
     "email-send-gate",          # sub-agent email gate + verified-recipient ledger
     "second-reviewer-gate",
+    "cimzett-gate",             # outgoing Telegram reply addressee rules
+    "tudastagadas-gate",        # outgoing Telegram reply knowledge-denial rules
+    "uzenet-hossz-gate",        # outgoing Telegram reply length limit
+    "interagent-ekezet-gate",   # inter-agent /api/* payloads: accentless Hungarian
     # egress, provenance, credentials, destructive commands
     "egress-gate",
     "provenance-gate",
@@ -85,6 +89,9 @@ DEFAULT_NON_DISABLEABLE = frozenset({
     "ledger-turn-failure",
     "ledger-live-drain",
     "ledger-live-drain-precheck",
+    # a disabled dedup backstop silently reopens the exact double-processing
+    # risk it exists to close (ea2eb050), so an env var may not switch it off either
+    "message-dedup-guard",
 })
 # Backwards-compatible name for the built-in floor.
 NON_DISABLEABLE = DEFAULT_NON_DISABLEABLE

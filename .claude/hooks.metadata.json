@@ -21,6 +21,14 @@
       },
       {
         "index": 2,
+        "id": "user-prompt-submit/message-dedup-guard",
+        "hook": "message-dedup-guard",
+        "gate": true,
+        "purpose": "UserPromptSubmit hook: recognise and neutralise a re-delivered inter-agent message before the agent acts on it a second time (ea2eb050, 2026-08-26).",
+        "fingerprint": "6b3cf6202241abf035c364ba1d14be48691738671bafa287d8275f868f3a0219"
+      },
+      {
+        "index": 3,
         "id": "user-prompt-submit/telegram-reply-directive",
         "hook": "telegram-reply-directive",
         "gate": false,
@@ -28,7 +36,7 @@
         "fingerprint": "61889545e21db54a1b9da6cecb2344443700dd45b5d6ac53199eeb12c53f7ee1"
       },
       {
-        "index": 3,
+        "index": 4,
         "id": "user-prompt-submit/provenance-gate",
         "hook": "provenance-gate",
         "gate": true,
@@ -36,7 +44,7 @@
         "fingerprint": "682fe777ea9db098c346b9990c0b472e0d45c5a9975b9cb368d933f8f551b1d7"
       },
       {
-        "index": 4,
+        "index": 5,
         "id": "user-prompt-submit/staleness-guard",
         "hook": "staleness-guard",
         "gate": true,
@@ -44,7 +52,7 @@
         "fingerprint": "d4dc155274071971c8b399e78da0abfb538388ece5255af74a7f30648c5d2168"
       },
       {
-        "index": 5,
+        "index": 6,
         "id": "user-prompt-submit/memory-lookup-nudge",
         "hook": "memory-lookup-nudge",
         "gate": false,
@@ -52,7 +60,7 @@
         "fingerprint": "65d80343e524a2ece861720f187afceae34673ed2373247a5cd7f9335084c3f4"
       },
       {
-        "index": 6,
+        "index": 7,
         "id": "user-prompt-submit/channel-inbox-drain",
         "hook": "channel-inbox-drain",
         "gate": false,
@@ -60,7 +68,7 @@
         "fingerprint": "101c6c0ed43cc506bb96cc596a5cddf48fa546ffb1db8cced759f516f1eb3fab"
       },
       {
-        "index": 7,
+        "index": 8,
         "id": "user-prompt-submit/voice-reply-directive",
         "hook": "voice-reply-directive",
         "gate": false,
@@ -68,7 +76,7 @@
         "fingerprint": "d08c8b922be426b706504f48fd419f56bb502a07c9a0913dbb6d678fca2cf78c"
       },
       {
-        "index": 8,
+        "index": 9,
         "id": "user-prompt-submit/telegram_progress",
         "hook": "telegram_progress",
         "gate": false,
@@ -76,7 +84,7 @@
         "fingerprint": "0e5787c1583a0ee01711c54924d3468e5cb978d350b3dfa47340a01b15c7e9c1"
       },
       {
-        "index": 9,
+        "index": 10,
         "id": "user-prompt-submit/slack_progress",
         "hook": "slack_progress",
         "gate": false,
@@ -84,7 +92,7 @@
         "fingerprint": "39155d23e69be104a79e48a9f2663781385623b7283436460bdcc36dc7f717ea"
       },
       {
-        "index": 10,
+        "index": 11,
         "id": "user-prompt-submit/marveen-commands",
         "hook": "marveen-commands",
         "gate": false,
@@ -92,7 +100,7 @@
         "fingerprint": "dba408c7acf29f1656b7bb66ba03372a85df5748297fd90a171ed71453384c80"
       },
       {
-        "index": 11,
+        "index": 12,
         "id": "user-prompt-submit/taskstate-stub",
         "hook": "taskstate-stub",
         "gate": false,
@@ -352,6 +360,38 @@
         "gate": true,
         "purpose": "PreToolUse gate: refuse a Bash command whose own TEXT will be re-scanned by the shell, because that is how prose becomes an executed command.",
         "fingerprint": "c57da1ed93fdc70ed0ede7bf1eb03c19d7a9de601178c97f0a5f4ce777c54342"
+      },
+      {
+        "index": 21,
+        "id": "pre-tool-use/cimzett-gate",
+        "hook": "cimzett-gate",
+        "gate": true,
+        "purpose": "PreToolUse gate: a kimeno Telegram valasz CIMZETTJE (chat_id) es a szoveg MEGSZOLITASA (a szoveg elejen alló nev) ne mondjon ellent egymasnak.",
+        "fingerprint": "52ff9de394db179690244133a3293f9a565565e74b613e472bfc6f8d763a5d7f"
+      },
+      {
+        "index": 22,
+        "id": "pre-tool-use/tudastagadas-gate",
+        "hook": "tudastagadas-gate",
+        "gate": true,
+        "purpose": "PreToolUse gate: mielott egy kimeno Telegram-valasz TUDAS-TAGADAST allit (\"nincs informacio\", \"nem tudom\", \"nem latom\" stb.), ellenorzi, hogy a valasz mar le...",
+        "fingerprint": "17c4655e3817b3cad70afeae1f0a15b2ea0295921b2dbfb722c9afb6e0f85fc5"
+      },
+      {
+        "index": 23,
+        "id": "pre-tool-use/uzenet-hossz-gate",
+        "hook": "uzenet-hossz-gate",
+        "gate": true,
+        "purpose": "PreToolUse kapu: a kimeno Telegram-uzenet ne legyen hosszabb, mint amit a CIMZETT ker.",
+        "fingerprint": "080ea14f86301c916bb84b2efb028dcddea7c9952d447e0e75f3c386aaf8cbbe"
+      },
+      {
+        "index": 24,
+        "id": "pre-tool-use/interagent-ekezet-gate",
+        "hook": "interagent-ekezet-gate",
+        "gate": true,
+        "purpose": "PreToolUse kapu: az INTER-AGENT uzenet (POST /api/messages) ne mehessen ki ekezet nelkuli magyarral.",
+        "fingerprint": "56f3fc62ca3db4816e0d52f6d11ef67ff0883df441c3bd520050b660f9de8661"
       }
     ],
     "Stop": [
