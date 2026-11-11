@@ -461,7 +461,7 @@ main() {
     return 0
   fi
 
-  msg="🔴 Nema agens(ek) eszlelve (${THRESHOLD_LABEL} kuszob, ${THRESHOLD_HOURS}h): [${SILENT_LIST# }]. Egyik forrasban sincs ujabb nyom (memoria, napi naplo, eszkoz-hivas, csatorna-uzenet). Ha ez tobb agenst erint egyszerre, nezd meg a tmux session-oket es a dashboard folyamatot elkulonitve -- a 2026-09-26/28-i kiesesnel a scheduler futott, az agensek megis nemak voltak."
+  msg="🔴 Néma agens(ek) észlelve (${THRESHOLD_LABEL} küszöb, ${THRESHOLD_HOURS}h): [${SILENT_LIST# }]. Egyik forrásban sincs újabb nyom (memória, napi napló, eszköz-hívás, csatorna-üzenet). Ha ez több agenst érint egyszerre, nézd meg külön-külön a tmux session mindegyikét és a dashboard folyamatot -- a 2026-09-26/28-i kiesésnél a scheduler futott, az agensek mégis némák voltak."
   log "$msg"
   if alert_owner "$msg"; then
     echo "$now|$silent_names" > "$ALERT_STAMP" 2>/dev/null || true

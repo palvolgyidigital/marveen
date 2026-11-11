@@ -71,7 +71,7 @@ describe('resolveBoundChannel on Discord (on-disk access.json)', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'access.json'), JSON.stringify({ dmPolicy: 'pairing', allowFrom: [USER_ID], groups: {}, pending: {} }))
     process.env.DISCORD_STATE_DIR = dir
-    expect(resolveBoundChannel(MAIN_AGENT_ID, 'discord')).toEqual({ provider: 'discord', chatId: null, discordNoChannel: true })
+    expect(resolveBoundChannel(MAIN_AGENT_ID, undefined, 'discord')).toEqual({ provider: 'discord', chatId: null, discordNoChannel: true })
   })
 
   it('a sub-agent with user ids only: never a user id as chat id', () => {

@@ -26,6 +26,12 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ScheduledTask } from '../web/scheduled-tasks-io.js'
+import { allowTargetSessionsForTest } from './helpers/allow-target-sessions.js'
+
+// OWNEREXEC1109: targetSessionRefused (schedule-runner.ts) only types into a known
+// fleet session; this suite's fixture targetSession is made up, so it must be
+// allow-listed here, exactly like the sibling usage-limit-gate suite.
+allowTargetSessionsForTest(['low-memory-test-session'])
 
 const CLEAN_PANE = [
   '> SCHEDULED TASK NOTICE',
