@@ -471,6 +471,153 @@ describe('runPushed', () => {
     const list = outgoingCommits({ localRef: 'refs/heads/topic', localSha: head, remoteRef: 'refs/heads/topic', remoteSha: ZERO }, 'origin', dir);
     expect(list).toHaveLength(2);
   });
+
+  // 52ac3a11 / d63e6fe3: the nightly upstream-sync rebases our own commits onto a new
+  // upstream base, which gives EVERY one of them a new hash even though their content did
+  // not change. Before this, the sha-only exclusion could not tell that from genuinely new
+  // content, and the whole rebased stack re-triggered every finding it had already cleared.
+  describe('content recognition (git patch-id --stable): a rebase must not re-trigger an already-cleared finding', () => {
+    it('a rebased/cherry-picked copy of an already-published commit passes without its own exception', async () => {
+      const dir = newRepo(tmp, 'contentrec-ok');
+      const base = commit(dir, 'a.txt', 'one\n');
+      const withEmail = commit(dir, 'owner.txt', `owner: ${PERSON}\n`, 'add owner contact');
+      const remote = join(tmp, 'contentrec-ok-remote.git');
+      git(tmp, ['init', '-q', '--bare', remote]);
+      git(dir, ['remote', 'add', 'origin', remote]);
+      const { piiHash } = await import('../security/pii-gate.js');
+      const first = await runPushed({
+        remoteName: 'origin', remoteUrl: remote, stdin: refLine(withEmail, base), cwd: dir,
+        exceptions: [{ path: 'owner.txt', sha256: piiHash(PERSON), reason: 'the maintainer contact, reviewed and published on purpose' }],
+      });
+      expect(first.exitCode).toBe(0); // first time through: needs the exception, same as today
+      git(dir, ['push', '-q', '--no-verify', 'origin', 'main']); // land it, so --remotes=origin now has it
+
+      // Simulate the rebase: a branch point BEFORE withEmail, an unrelated commit, then the
+      // exact same change cherry-picked on top -- same diff, brand-new sha, different parent.
+      git(dir, ['checkout', '-q', '-b', 'rebased', base]);
+      const unrelated = commit(dir, 'z.txt', 'zzz\n');
+      git(dir, ['cherry-pick', withEmail]);
+      const rebasedHead = git(dir, ['rev-parse', 'HEAD']).trim();
+      expect(rebasedHead).not.toBe(withEmail); // genuinely a new hash, not the same commit
+
+      const second = await runPushed({ remoteName: 'origin', remoteUrl: remote, stdin: refLine(rebasedHead), cwd: dir });
+      expect(second.exitCode).toBe(0); // NO exception supplied this time -- content recognition alone must carry it
+      expect(second.report).toMatch(/Recognized by content \(1\)/);
+      expect(second.report).toContain(rebasedHead.slice(0, 10));
+      expect(second.report).not.toMatch(/Exceptions applied/);
+      expect(second.report).toContain(`2 outgoing commit(s)`); // unrelated + rebasedHead were both outgoing
+      void unrelated;
+    });
+
+    it('a commit whose content genuinely differs still blocks (positive control)', async () => {
+      const dir = newRepo(tmp, 'contentrec-control');
+      const base = commit(dir, 'a.txt', 'one\n');
+      const withEmail = commit(dir, 'owner.txt', `owner: ${PERSON}\n`, 'add owner contact');
+      const remote = join(tmp, 'contentrec-control-remote.git');
+      git(tmp, ['init', '-q', '--bare', remote]);
+      git(dir, ['remote', 'add', 'origin', remote]);
+      const { piiHash } = await import('../security/pii-gate.js');
+      await runPushed({
+        remoteName: 'origin', remoteUrl: remote, stdin: refLine(withEmail, base), cwd: dir,
+        exceptions: [{ path: 'owner.txt', sha256: piiHash(PERSON), reason: 'the maintainer contact, reviewed and published on purpose' }],
+      });
+      git(dir, ['push', '-q', '--no-verify', 'origin', 'main']);
+
+      // A rebase that is NOT a clean re-apply: the conflict resolution adds a genuinely new
+      // line carrying personal data. Same "slot" in the history, different diff, different
+      // patch-id -- requirement 1: this must still be fully inspected, not waved through.
+      const OTHER_PERSON = j('bartok.bela', '@', 'yahoo.com');
+      git(dir, ['checkout', '-q', '-b', 'rebased-modified', base]);
+      git(dir, ['cherry-pick', withEmail]);
+      writeFileSync(join(dir, 'owner.txt'), `owner: ${PERSON}\nbackup: ${OTHER_PERSON}\n`);
+      git(dir, ['commit', '-q', '-a', '--amend', '--no-edit']);
+      const modifiedHead = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      const r = await runPushed({ remoteName: 'origin', remoteUrl: remote, stdin: refLine(modifiedHead), cwd: dir });
+      expect(r.exitCode).toBe(1); // blocked: new content, no exception covers OTHER_PERSON
+      expect(r.report).not.toMatch(/Recognized by content/);
+      expect(r.report).toContain(modifiedHead.slice(0, 10));
+    });
+
+    it('a patch-id match with a DIFFERENT message still has its message scanned', async () => {
+      const dir = newRepo(tmp, 'contentrec-msg');
+      const base = commit(dir, 'a.txt', 'one\n');
+      const clean = commit(dir, 'owner.txt', 'owner: nobody\n', 'add owner line');
+      const remote = join(tmp, 'contentrec-msg-remote.git');
+      git(tmp, ['init', '-q', '--bare', remote]);
+      git(dir, ['remote', 'add', 'origin', remote]);
+      const first = await runPushed({ remoteName: 'origin', remoteUrl: remote, stdin: refLine(clean, base), cwd: dir });
+      expect(first.exitCode).toBe(0);
+      git(dir, ['push', '-q', '--no-verify', 'origin', 'main']);
+
+      // Same diff, cherry-picked, but the message is rewritten during the rebase and the
+      // NEW message carries personal data that the original message never had.
+      git(dir, ['checkout', '-q', '-b', 'rebased-msg', base]);
+      git(dir, ['cherry-pick', '--no-commit', clean]);
+      git(dir, ['commit', '-q', '-m', `add owner line\n\nreported by ${PERSON}`]);
+      const rebasedHead = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      const r = await runPushed({ remoteName: 'origin', remoteUrl: remote, stdin: refLine(rebasedHead), cwd: dir });
+      expect(r.exitCode).toBe(1); // the diff matched and was skipped, but the NEW message did not
+      expect(r.report).toMatch(/Recognized by content \(1\)/);
+      expect(r.report).toMatch(/message differs: message was still scanned/);
+      expect(r.report).toContain('commit message');
+    });
+
+    it('a URL change does not let content-recognition hide a commit the old repo already had', async () => {
+      const dir = newRepo(tmp, 'contentrec-urlchange');
+      const dirty = commit(dir, 'owner.txt', `owner: ${PERSON}\n`, 'add owner contact');
+      const remote = join(tmp, 'contentrec-urlchange-remote.git');
+      git(tmp, ['init', '-q', '--bare', remote]);
+      git(dir, ['remote', 'add', 'origin', remote]);
+      git(dir, ['push', '-q', '--no-verify', 'origin', 'main']);
+      git(dir, ['checkout', '-q', '-b', 'topic']);
+      const head = commit(dir, 'new.txt', 'clean\n');
+      const first = await runPushed({ remoteName: 'origin', remoteUrl: remote, stdin: refLine(head), cwd: dir });
+      expect(first.exitCode).toBe(0); // dirty is already on THIS remote
+
+      // The exact same local history, but the remote URL behind the name "origin" changed:
+      // its tracking refs now describe a different repository. If content-recognition kept
+      // trusting them, `dirty` -- whose diff trivially matches itself -- would be waved
+      // through by the very content check meant to make rebases cheaper, not more permissive.
+      const second = await runPushed({ remoteName: 'origin', remoteUrl: `${remote}-other`, stdin: refLine(head), cwd: dir });
+      expect(second.exitCode).toBe(1);
+      expect(second.report).toContain(dirty.slice(0, 10));
+      expect(second.report).not.toMatch(/Recognized by content/);
+    });
+
+    it('scopes the known set to OUR OWN commits: excludes anything also reachable from "upstream"', async () => {
+      const dir = newRepo(tmp, 'contentrec-scope');
+      const base = commit(dir, 'a.txt', 'one\n');
+      // `sharedWithUpstream` ends up on BOTH remotes (a fork always carries upstream's own
+      // history); `ownOnly` is pushed to origin alone, i.e. genuinely OUR commit.
+      const sharedWithUpstream = commit(dir, 'shared.txt', 'shared content\n', 'shared: also on upstream');
+      const ownOnly = commit(dir, 'own.txt', 'own content\n', 'our own addition');
+      const originRemote = join(tmp, 'contentrec-scope-origin.git');
+      const upstreamRemote = join(tmp, 'contentrec-scope-upstream.git');
+      git(tmp, ['init', '-q', '--bare', originRemote]);
+      git(tmp, ['init', '-q', '--bare', upstreamRemote]);
+      git(dir, ['remote', 'add', 'origin', originRemote]);
+      git(dir, ['remote', 'add', 'upstream', upstreamRemote]);
+      git(dir, ['push', '-q', '--no-verify', 'upstream', `${sharedWithUpstream}:refs/heads/main`]);
+      git(dir, ['push', '-q', '--no-verify', 'origin', 'main']);
+
+      // Two independent rebases, onto a fresh branch point so the sha changes but the diff
+      // does not: one reproduces `sharedWithUpstream`'s diff, the other `ownOnly`'s.
+      git(dir, ['checkout', '-q', '-b', 'rebased', base]);
+      commit(dir, 'spacer.txt', 'spacer\n');
+      git(dir, ['cherry-pick', sharedWithUpstream]);
+      const rebasedShared = git(dir, ['rev-parse', 'HEAD']).trim();
+      git(dir, ['cherry-pick', ownOnly]);
+      const rebasedOwn = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      const r = await runPushed({ remoteName: 'origin', remoteUrl: originRemote, stdin: refLine(rebasedOwn), cwd: dir });
+      expect(r.exitCode).toBe(0); // no personal data either way; this checks WHICH ones matched
+      expect(r.report).toMatch(/Recognized by content \(1\)/);   // exactly one: the own-content rebase
+      expect(r.report).toContain(rebasedOwn.slice(0, 10));
+      expect(r.report).not.toContain(rebasedShared.slice(0, 10)); // the upstream-shared rebase was NOT
+    });
+  });
 });
 
 // ── the INSTALLED hook, driven by real `git push` ───────────────────────────

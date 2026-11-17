@@ -236,12 +236,96 @@ function loadDenylist(cwd: string): { denylist: Denylist; note: string } {
   return { denylist: parseDenylist(readFileSync(file, 'utf8')), note: `local denylist loaded (${file})` };
 }
 
-/** Scan a set of commits; returns findings, applied exceptions and unscanned binaries. */
+/**
+ * One outgoing commit's DIFF is byte-identical (per `git patch-id --stable`, over the same
+ * diff options the scanner itself uses) to a commit the remote already has. `sameMessage`
+ * says whether the commit MESSAGE is ALSO identical: patch-id hashes the diff only, so a
+ * message edit during a rebase (rare, but possible) is not covered by the diff match.
+ */
+export interface ContentMatch { matchedSha: string; sameMessage: boolean }
+
+/**
+ * `git patch-id --stable` for each commit's own diff, batched. The sha each id belongs to
+ * comes from git's own `commit %H` header line (the documented `git log -p | git patch-id`
+ * pairing) -- a diff LINE can never start a line with the bare word "commit" (every diff
+ * line, hunk header and file header carries its own prefix), so a crafted added line cannot
+ * forge which commit an id is attributed to.
+ */
+function patchIdsFor(commits: string[], cwd: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let i = 0; i < commits.length; i += CHUNK) {
+    const chunk = commits.slice(i, i + CHUNK);
+    const log = git(
+      [
+        'log', '--no-walk=unsorted', '--stdin', '-p', '--cc', '-U0', '--no-renames', '--no-color',
+        '--no-textconv', '--no-ext-diff', '--text', '--src-prefix=a/', '--dst-prefix=b/',
+        '--format=commit %H',
+      ],
+      cwd, `${chunk.join('\n')}\n`,
+    );
+    const raw = execFileSync('git', ['patch-id', '--stable'], {
+      cwd, input: log, encoding: 'utf8', maxBuffer: MAX_BUFFER, timeout: GIT_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    for (const line of raw.split('\n')) {
+      const m = /^([0-9a-f]{20,64})\s+([0-9a-f]{40,64})$/.exec(line.trim());
+      if (m && !ZERO.test(m[2])) out.set(m[2], m[1]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Commits a rebase/cherry-pick can legitimately re-hash: OUR OWN commits already on the
+ * remote, not the whole of upstream's history. When an "upstream" remote is configured the
+ * known set excludes anything also reachable from it, which keeps this cheap on an ordinary
+ * push (our own commit count, not the project's full history) and on-topic: a coincidental
+ * patch-id match against someone else's upstream commit is not "our commit came back", it
+ * would be an unrelated identical diff, which content-recognition is not for.
+ */
+export function remoteContentIndex(remoteName: string, cwd: string, trustTracking = true): Map<string, string> {
+  // Same reasoning as `outgoingCommits`' own `trustTracking`: when the URL behind this NAME
+  // changed, its tracking refs describe a DIFFERENT repository, and recognizing a commit's
+  // content against them is exactly as wrong as excluding it by sha would be -- a commit the
+  // old repo already had must not be waved through as "already known" to the new one.
+  if (!trustTracking || !remoteIsConfigured(remoteName, cwd)) return new Map();
+  const args = ['rev-list', `--remotes=${remoteName}`];
+  if (remoteIsConfigured('upstream', cwd)) args.push('--not', '--remotes=upstream');
+  let known: string[];
+  try { known = git(args, cwd).split('\n').filter(Boolean); } catch { return new Map(); }
+  if (!known.length) return new Map();
+  const byId = new Map<string, string>(); // patch-id -> one known sha (first wins)
+  for (const [sha, id] of patchIdsFor(known, cwd)) if (!byId.has(id)) byId.set(id, sha);
+  return byId;
+}
+
+/** Which outgoing commits the index above already recognizes, and whether the message matches too. */
+export function matchByContent(
+  commits: string[], index: ReadonlyMap<string, string>, cwd: string,
+): Map<string, ContentMatch> {
+  const out = new Map<string, ContentMatch>();
+  if (!commits.length || index.size === 0) return out;
+  for (const [sha, id] of patchIdsFor(commits, cwd)) {
+    const matchedSha = index.get(id);
+    if (!matchedSha) continue;
+    const a = git(['log', '-1', '--format=%B', sha], cwd);
+    const b = git(['log', '-1', '--format=%B', matchedSha], cwd);
+    out.set(sha, { matchedSha, sameMessage: a === b });
+  }
+  return out;
+}
+
+/** Scan a set of commits; returns findings, applied exceptions, content-recognized skips and unscanned binaries. */
 export function scanCommits(
   commits: string[], cwd: string, denylist: Denylist, exceptions: readonly PiiException[],
-): { findings: PiiFinding[]; exceptions: { file: string; line?: number; detector: string; reason: string }[] } {
+  known: ReadonlyMap<string, ContentMatch> = new Map(),
+): {
+  findings: PiiFinding[];
+  exceptions: { file: string; line?: number; detector: string; reason: string }[];
+  recognized: { commit: string; matchedSha: string; sameMessage: boolean }[];
+} {
   const findings: PiiFinding[] = [];
   const applied: { file: string; line?: number; detector: string; reason: string }[] = [];
+  const recognized: { commit: string; matchedSha: string; sameMessage: boolean }[] = [];
   const marker = `PIIGATE-${randomBytes(16).toString('hex')}-`;
   for (let i = 0; i < commits.length; i += CHUNK) {
     const chunk = commits.slice(i, i + CHUNK);
@@ -254,6 +338,17 @@ export function scanCommits(
         throw new Error(`git returned no ${patch === undefined ? 'patch' : 'message'} for commit ${sha.slice(0, 10)}`);
       }
       const short = sha.slice(0, 10);
+      const match = known.get(sha);
+      if (match) {
+        // The DIFF already matches a commit the remote has: skip the diff (and binary) scan.
+        // Only when the MESSAGE differs too is there anything left this match does not cover.
+        recognized.push({ commit: short, matchedSha: match.matchedSha.slice(0, 10), sameMessage: match.sameMessage });
+        if (match.sameMessage) continue;
+        const r = scanAdded(messageLines(sha, msg), short, { denylist, exceptions, messageMode: true });
+        findings.push(...r.findings);
+        applied.push(...r.exceptions);
+        continue;
+      }
       const parsed = parseAddedLines(patch);
       // A binary cannot be read by a text detector. It is not "a NOTE": an xlsx or a pdf full of
       // personal data would sail through a public push. It is a FINDING; a reviewed exception
@@ -274,7 +369,7 @@ export function scanCommits(
       }
     }
   }
-  return { findings, exceptions: applied };
+  return { findings, exceptions: applied, recognized };
 }
 
 function describe(findings: PiiFinding[]): string[] {
@@ -368,9 +463,16 @@ export async function runPushed(input: PushedInput): Promise<PushedResult> {
 
     const all: PiiFinding[] = [];
     const exc: { file: string; line?: number; detector: string; reason: string }[] = [];
+    const recognized: { commit: string; matchedSha: string; sameMessage: boolean }[] = [];
     let commitCount = 0;
     const urlChange = remoteUrlChanged(input.remoteName, input.remoteUrl, input.cwd);
     if (urlChange) say(`pii-gate: the URL behind remote "${input.remoteName}" changed since the last run -- its tracking refs describe another repository, so they hide nothing.`);
+    // Built ONCE per run, not per ref update: the set of our own commits the remote already
+    // has, indexed by the diff's patch-id. A rebase/cherry-pick that re-hashes one of OUR OWN
+    // commits without changing its content is recognized here instead of being re-scanned as
+    // if it were new (d63e6fe3 / 52ac3a11: the nightly upstream-sync rebase gives already
+    // reviewed commits new hashes, which the old sha-only exclusion could not see through).
+    const contentIndex = remoteContentIndex(input.remoteName, input.cwd, !urlChange);
     for (const u of live) {
       // An annotated tag carries a MESSAGE that rev-list never shows; scan it, peeling nested tags.
       const tagMsg = tagMessages(u.localSha, input.cwd);
@@ -381,14 +483,20 @@ export async function runPushed(input: PushedInput): Promise<PushedResult> {
       }
       const commits = outgoingCommits(u, input.remoteName, input.cwd, !urlChange);
       commitCount += commits.length;
-      const r = scanCommits(commits, input.cwd, dl.denylist, input.exceptions ?? PII_EXCEPTIONS);
+      const match = matchByContent(commits, contentIndex, input.cwd);
+      const r = scanCommits(commits, input.cwd, dl.denylist, input.exceptions ?? PII_EXCEPTIONS, match);
       all.push(...r.findings);
       exc.push(...r.exceptions);
+      recognized.push(...r.recognized);
     }
 
     const strict = vis.state !== 'private';
     say(`pii-gate: ${commitCount} outgoing commit(s) to "${input.remoteName}" -- target ${vis.state.toUpperCase()}: ${vis.reason}`);
     say(`pii-gate: ${dl.note}`);
+    if (recognized.length) {
+      say(`Recognized by content (${recognized.length}) -- same diff as a commit already on the remote (git patch-id --stable), not re-inspected:`);
+      recognized.forEach((rc) => say(`  ${rc.commit}  <- ${rc.matchedSha}${rc.sameMessage ? '' : '  (message differs: message was still scanned)'}`));
+    }
     if (exc.length) {
       say(`Exceptions applied (${exc.length}) -- one literal each, re-read them:`);
       exc.forEach((e) => say(`  ${e.file}${e.line ? `:${e.line}` : ''}  [${e.detector}]  <- ${e.reason}`));
