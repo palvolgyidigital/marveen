@@ -456,6 +456,11 @@ def _mask_subshell_markers(cmd: str) -> str:
     while i < n:
         ch = cmd[i]
         if q:
+            # BOB7920: a backslash-newline is a line continuation even inside "...": both characters vanish,
+            # the line before glues onto the line after. The generic backslash-escape branch right below it
+            # would otherwise keep the newline as literal content.
+            if ch == "\\" and q == '"' and i + 1 < n and cmd[i + 1] == "\n":
+                i += 2; continue
             if ch == "\\" and q == '"' and i + 1 < n:
                 out.append(cmd[i:i + 2]); i += 2; continue
             if ch == q:
@@ -463,6 +468,17 @@ def _mask_subshell_markers(cmd: str) -> str:
             out.append(ch); i += 1; continue
         if ch in "'\"":
             q = ch; out.append(ch); i += 1; continue
+        # BOB7920: same continuation, outside quotes. The old generic backslash-escape branch kept the
+        # backslash AND the newline as two literal characters, so a bare "\n" later became ITS OWN TOKEN in
+        # _segments_tokens (surrounded by whitespace, never glued onto either neighbouring word) -- e.g.
+        # `cd D && \<newline>  python3 x.py` tokenized to ["cd","D","&&","\n","python3","x.py"], and "\n" (not
+        # "python3") was read as the command's head/program. _head_runs_sender_script / _command_heads then saw
+        # an unrecognised program and returned False outright -- this does NOT fall into any of the fail-closed
+        # branches below (those only fire once the program is already known to be python/node), so it is a send
+        # missed on BOTH gates alike, not just the sub-agent one (measured live 2026-11-16, kanban 9a33e565's
+        # sibling incident, msg 7919/7920). A continuation must glue, not interpose a word.
+        if ch == "\\" and i + 1 < n and cmd[i + 1] == "\n":
+            i += 2; continue
         if ch == "\\" and i + 1 < n:
             out.append(cmd[i:i + 2]); i += 2; continue
         # a ) that closes a $( ends no word: `$(echo a)#x` is one word (Bence 69701)

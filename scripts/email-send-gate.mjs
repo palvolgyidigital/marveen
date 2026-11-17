@@ -390,12 +390,25 @@ export function maskSubshellMarkers(cmd) {
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i]
     if (q) {
+      // BOB7920: a backslash-newline is a line continuation even inside "...": both characters vanish, the
+      // line before glues onto the line after. The generic backslash-escape branch below it would otherwise
+      // keep the newline as literal content.
+      if (ch === '\\' && q === '"' && cmd[i + 1] === '\n') { i++; continue }
       if (ch === '\\' && q === '"' && i + 1 < cmd.length) { out += cmd[i] + cmd[i + 1]; i++; continue }
       if (ch === q) q = null
       out += ch
       continue
     }
     if (ch === "'" || ch === '"') { q = ch; out += ch; continue }
+    // BOB7920: same continuation, outside quotes. The old generic backslash-escape branch kept the backslash
+    // AND the newline as two literal characters, so a bare `\n` later became ITS OWN TOKEN in segmentsTokens
+    // (surrounded by whitespace, never glued onto either neighbouring word) -- e.g. `cd D && \<newline>  npx x`
+    // tokenized to ["cd","D","&&","\n","npx","x"], and "\n" (not "npx") was read as the command's head/program.
+    // headRunsSenderScript/commandHeads then saw an unrecognised program and fell through to the unaddressed
+    // branch, which is no-send without an address: a readable mail-sending script run this way passed the
+    // gate unseen (measured live 2026-11-16, kanban 9a33e565's sibling incident, msg 7919/7920). A continuation
+    // must glue, not interpose a word.
+    if (ch === '\\' && cmd[i + 1] === '\n') { i++; continue }
     if (ch === '\\' && i + 1 < cmd.length) { out += cmd[i] + cmd[i + 1]; i++; continue }
     if (ch === '\n' || ch === '`') { out += ';'; continue }
     if (ch === '$' && cmd[i + 1] === '(') { out += ';'; i++; continue }
