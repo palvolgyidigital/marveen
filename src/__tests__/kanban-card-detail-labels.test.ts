@@ -57,8 +57,8 @@ describe('the Kanban card detail', () => {
     const start = APP.indexOf('\nfunction populateAssigneeSelect(')
     const src = APP.slice(start + 1, APP.indexOf('\n}\n', start) + 2)
     const sel: { innerHTML: string; value: string; appendChild: (o: unknown) => void } = { innerHTML: '', value: '', appendChild: () => {} }
-    const populate = new Function('document', 'kanbanAssignees', 'escapeHtml', 't', `${src}\nreturn populateAssigneeSelect`)(
-      { getElementById: () => sel, createElement: () => ({}) }, [{ name: 'anna' }], (s: string) => String(s), makeT(lang),
+    const populate = new Function('document', 'kanbanAssigneeOptions', 'escapeHtml', 't', `${src}\nreturn populateAssigneeSelect`)(
+      { getElementById: () => sel, createElement: () => ({}) }, () => [{ name: 'anna' }], (s: string) => String(s), makeT(lang),
     ) as (id: string, selected?: string) => void
     populate('cardAssignee')
     expect(sel.innerHTML).toBe(`<option value="">${want}</option>`)
@@ -81,11 +81,11 @@ describe('the Kanban card detail', () => {
     expect(LABELS).not.toBe('')
     const els: Record<string, Record<string, unknown>> = {}
     const renderCardLabelsSection = new Function(
-      'document', 'fetch', 'escapeHtml', 't', 'kanbanAllLabels', 'safeCssColor', 'loadKanban', 'showToast', 'window',
+      'document', 'fetch', 'escapeHtml', 't', 'kanbanAllLabels', 'safeCssColor', 'loadKanban', 'showToast', 'window', 'collapseEmptyDetailSection',
       `${LABELS}\nreturn renderCardLabelsSection`,
     )(
       { getElementById: (id: string) => (els[id] ||= fakeEl()), createElement: () => fakeEl() },
-      async () => ({ json: async () => [] }), (s: string) => String(s), makeT(lang), [], (c: string) => c, () => {}, () => {}, {},
+      async () => ({ json: async () => [] }), (s: string) => String(s), makeT(lang), [], (c: string) => c, () => {}, () => {}, {}, () => {},
     ) as (card: { id: string }) => Promise<void>
     await renderCardLabelsSection({ id: 'c1' })
     expect(els.cardLabelAdd.innerHTML).toBe(`<option value="">${want}</option>`)
