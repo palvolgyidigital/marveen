@@ -38,6 +38,16 @@ vi.mock('node:child_process', async (orig) => ({
     }
     return ''
   }),
+  // capturePaneAsync (CAPTUREASYNC1109-class refactor, #2693) goes through
+  // captureTmuxAsync -> the callback-style execFile, not execFileSync -- same
+  // 'capture-pane' args, same queued fixtures, same call counter.
+  execFile: vi.fn((_file: string, args: string[], _opts: unknown, cb: (err: unknown, stdout: string, stderr: string) => void) => {
+    const out = Array.isArray(args) && args.includes('capture-pane')
+      ? (h.captureCalls++, h.queue.shift() ?? h.IDLE_PANE)
+      : ''
+    setImmediate(() => cb(null, out, ''))
+    return { killed: false, kill: () => {} }
+  }),
 }))
 
 import { isSessionReadyForPrompt } from '../web/agent-process.js'
