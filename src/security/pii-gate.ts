@@ -379,7 +379,17 @@ export interface PiiException {
   reason: string;
 }
 
-export const PII_EXCEPTIONS: readonly PiiException[] = Object.freeze([]);
+export const PII_EXCEPTIONS: readonly PiiException[] = Object.freeze([
+  {
+    path: 'scripts/mailerlite-report.ts',
+    sha256: '224e2ee5fc254bc5c851f91f5c8729fe83309140ec4cf23d2c6f047884278327',
+    reason:
+      "Marci's decision, Telegram 12778, 2026-11-17 09:59 ('Menjen igy'), on kanban " +
+      'card d63e6fe3: the matched text is the account segment of a CLI --out default ' +
+      "that points under an agent's own store directory (scripts/mailerlite-report.ts:152), " +
+      'not a real human home-directory path. Scoped to this one file and this one matched value.',
+  },
+]);
 
 export function piiHash(matched: string): string {
   return createHash('sha256').update(matched, 'utf8').digest('hex');
