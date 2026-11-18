@@ -92,7 +92,7 @@
         "fingerprint": "39155d23e69be104a79e48a9f2663781385623b7283436460bdcc36dc7f717ea"
       },
       {
-        "index": 10,
+        "index": 11,
         "id": "user-prompt-submit/googlechat-thread-guard",
         "hook": "googlechat-thread-guard",
         "gate": true,
@@ -100,7 +100,7 @@
         "fingerprint": "9c97b8ab521de58f707156b64bbade9848e5edc4d14f55f9f363fc2350ffa19e"
       },
       {
-        "index": 11,
+        "index": 12,
         "id": "user-prompt-submit/marveen-commands",
         "hook": "marveen-commands",
         "gate": false,
@@ -108,7 +108,7 @@
         "fingerprint": "dba408c7acf29f1656b7bb66ba03372a85df5748297fd90a171ed71453384c80"
       },
       {
-        "index": 12,
+        "index": 13,
         "id": "user-prompt-submit/taskstate-stub",
         "hook": "taskstate-stub",
         "gate": false,
@@ -386,7 +386,7 @@
         "fingerprint": "c57da1ed93fdc70ed0ede7bf1eb03c19d7a9de601178c97f0a5f4ce777c54342"
       },
       {
-        "index": 21,
+        "index": 23,
         "id": "pre-tool-use/googlechat-thread-guard",
         "hook": "googlechat-thread-guard",
         "gate": true,
@@ -394,7 +394,7 @@
         "fingerprint": "d226afbb836e3ae6011082173f34c2f2746906a8aabed55bfce8305373379e8b"
       },
       {
-        "index": 22,
+        "index": 24,
         "id": "pre-tool-use/cimzett-gate",
         "hook": "cimzett-gate",
         "gate": true,
@@ -402,7 +402,7 @@
         "fingerprint": "52ff9de394db179690244133a3293f9a565565e74b613e472bfc6f8d763a5d7f"
       },
       {
-        "index": 23,
+        "index": 25,
         "id": "pre-tool-use/tudastagadas-gate",
         "hook": "tudastagadas-gate",
         "gate": true,
@@ -410,7 +410,7 @@
         "fingerprint": "17c4655e3817b3cad70afeae1f0a15b2ea0295921b2dbfb722c9afb6e0f85fc5"
       },
       {
-        "index": 24,
+        "index": 26,
         "id": "pre-tool-use/uzenet-hossz-gate",
         "hook": "uzenet-hossz-gate",
         "gate": true,
@@ -418,7 +418,7 @@
         "fingerprint": "080ea14f86301c916bb84b2efb028dcddea7c9952d447e0e75f3c386aaf8cbbe"
       },
       {
-        "index": 25,
+        "index": 27,
         "id": "pre-tool-use/interagent-ekezet-gate",
         "hook": "interagent-ekezet-gate",
         "gate": true,
