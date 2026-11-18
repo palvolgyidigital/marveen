@@ -1437,6 +1437,21 @@ export function resolveBoundChannel(
   if (task?.telegramChatId) return { provider, chatId: task.telegramChatId }
 
   if (agentName === MAIN_AGENT_ID) {
+    // #2390 (Marci, Telegram 13094): on Discord an allowFrom entry is a user id,
+    // never a delivery target -- resolveOwnerChatId's generic "first allowFrom
+    // entry" fallback does not know this, so a main agent paired to exactly one
+    // Discord DM contact got THAT USER'S OWN id handed back as the chat to send
+    // to. The configured-override precedence stays exactly as resolveOwnerChatId
+    // applies it (untouched); only the access.json fallback for Discord takes
+    // discordBoundChannelFromAccess's rule instead. Telegram/Slack unchanged.
+    const configured = normalizeChatId(configuredOwnerChatFor(provider))
+    if (configured) return { provider, chatId: configured }
+    if (provider === 'discord') {
+      try {
+        const raw = JSON.parse(readFileSync(join(channelStateDir(provider), 'access.json'), 'utf-8')) as Record<string, unknown>
+        return { provider, ...discordBoundChannelFromAccess(raw) }
+      } catch { return { provider, chatId: null } }
+    }
     return { provider, chatId: resolveOwnerChatId(undefined, configuredOwnerChatFor(provider), provider) }
   }
 
