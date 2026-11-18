@@ -25,7 +25,11 @@ const ROOT = join(__dirname, '..', '..')
 const GATE_PY = join(ROOT, 'scripts', 'hooks', 'outgoing-copy-gate.py')
 const CASES = JSON.parse(
   readFileSync(join(ROOT, 'scripts', 'hooks', 'send-invocation-cases.json'), 'utf-8'),
-) as { known_agents: string[]; cases: Array<{ name: string; cmd: string; expected: boolean }> }
+) as {
+  known_agents: string[]
+  cases: Array<{ name: string; cmd: string; expected: boolean }>
+  fork_overrides?: Record<string, { expected: boolean; display_name: string; reason: string }>
+}
 
 // One python process for the whole list: stdin carries the JSON cases, stdout
 // returns the per-case verdicts. Spawning per-case would be ~30x slower.
@@ -49,11 +53,24 @@ describe('send-invocation conformance: both gates agree with the shared contract
   setKnownAgentsOverride(CASES.known_agents)
 
   CASES.cases.forEach((c, i) => {
-    it(`${c.name} -> ${c.expected}`, () => {
+    // FORKOVERRIDE1118: a case named in fork_overrides tests THIS FORK's own,
+    // documented-divergent expectation (and title), never the shared upstream
+    // one -- see the JSON's own fork_overrides_comment for why.
+    const override = CASES.fork_overrides?.[c.name]
+    const expected = override ? override.expected : c.expected
+    const label = override ? override.display_name : `${c.name} -> ${c.expected}`
+    it(label, () => {
       const js = isSendInvocation(c.cmd)
-      expect(js, `JS verdict for: ${c.cmd}`).toBe(c.expected)
-      expect(py[i], `python verdict for: ${c.cmd}`).toBe(c.expected)
+      expect(js, `JS verdict for: ${c.cmd}`).toBe(expected)
+      expect(py[i], `python verdict for: ${c.cmd}`).toBe(expected)
     })
+  })
+
+  it('FORKOVERRIDE1118: every fork_overrides key still names a real case (an upstream sync did not drop or rename it)', () => {
+    const names = new Set(CASES.cases.map((c) => c.name))
+    for (const key of Object.keys(CASES.fork_overrides ?? {})) {
+      expect(names.has(key), `fork_overrides key not found among cases: ${key}`).toBe(true)
+    }
   })
 
   it('the shared list is non-trivial in both directions', () => {

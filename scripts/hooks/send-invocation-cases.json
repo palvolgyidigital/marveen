@@ -8,6 +8,14 @@
     "neo",
     "neo3"
   ],
+  "fork_overrides_comment": "Entries here override a case's 'expected' value for THIS FORK ONLY, keyed by the case's exact 'name' in `cases`. The `cases` entry itself stays byte-identical to upstream's own copy of this file (verified against upstream/develop HEAD) so a future upstream-sync never conflicts on that line; this block is the ONLY place the fork's actual, diverging expectation lives, and the conformance test (send-invocation-conformance.test.ts) reads it instead of the shared `expected` for a named case, under its OWN test name (display_name) -- so the test's own title never again asserts the opposite of what both gates actually do. If a future upstream sync changes or drops the named case, the key here goes orphaned (harmless, caught by the wiring test below) rather than silently reapplying the upstream expectation.",
+  "fork_overrides": {
+    "FLEETTOFLAG1025 v4 (Merlin 34827): a backslash-newline after --to -- the next token is not a known agent name: a send (fail-closed)": {
+      "expected": false,
+      "display_name": "FLEETTOFLAG1025 v4 (Merlin 34827) + BOB7920 fork override: a backslash-newline after --to no longer hides a KNOWN agent name -- not a send",
+      "reason": "Marci decision (Telegram 13108, 2026-11-18, \"Menjen\", a 13107-es kerdesre): our BOB7920 mail-gate fix (99169579, JSCDSEND1104) correctly joins a backslash-newline continuation before reading --to's value, so a known agent name past the break is now recognized exactly as it would be unbroken -- consistent with the sibling cases right above/below this one ('every --to value a known agent: not a send', 'a quoted known agent name: not a send'). This is deliberately STRICTER/more precise than upstream's own gate, which still expects true for this exact input (confirmed on upstream/develop HEAD, same known_agents list, same cmd) -- a documented, intentional fork divergence, not a shared-contract bug."
+    }
+  },
   "cases": [
     {
       "name": "inter-agent curl, content mentions the mail script",
@@ -1530,9 +1538,9 @@
       "expected": false
     },
     {
-      "name": "FLEETTOFLAG1025 v4 (Merlin 34827) + BOB7920: a backslash-newline after --to no longer hides a known agent name: not a send",
+      "name": "FLEETTOFLAG1025 v4 (Merlin 34827): a backslash-newline after --to -- the next token is not a known agent name: a send (fail-closed)",
       "cmd": "$F message post --to \\\n  diszpecser --content-stdin < x.txt",
-      "expected": false
+      "expected": true
     },
     {
       "name": "FLEETTOFLAG1025 v3: 2>&1 after --to -- the tokenizer cuts the segment at &, --to has no value: a send (fail-closed)",
