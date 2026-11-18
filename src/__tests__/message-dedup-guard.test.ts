@@ -4,12 +4,17 @@
 // closes the other side -- if a message is ever resent after it had, in
 // fact, already landed, the receiving agent must not act on it twice.
 //
-// Behavioural tests run the python hook as a subprocess against an isolated
-// DB (LEDGER_DB_PATH), deterministic, no LLM. Static tests lock the wiring
-// (template + scaffold migration + startup call), mirroring staleness-guard's
-// own test shape exactly.
+// Behavioural tests run the python hook as a subprocess from a tmp install
+// (<tmp>/scripts linked to the repo's, mirroring ledger-turn-failure.test.py
+// and friends), so its ledger DB is <tmp>/store/claudeclaw.db. Since
+// ENVRELAXGATE1104 no environment variable picks the ledger DB -- an isolated
+// LEDGER_DB_PATH override is silently ignored by ledger_lib.db_path(), which
+// used to make this suite write its test rows into the real install's
+// store/claudeclaw.db instead of the tmp DB it thought it was using. Static
+// tests lock the wiring (template + scaffold migration + startup call),
+// mirroring staleness-guard's own test shape exactly.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, symlinkSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -18,25 +23,34 @@ import Database from 'better-sqlite3'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..', '..')
-const HOOK = join(ROOT, 'scripts', 'hooks', 'message-dedup-guard.py')
 
 let DB_DIR = ''
 let DB_PATH = ''
+let HOOK = ''
 
-// Real, in-tree cwd paths (under THIS checkout's own agents/ dir), not
-// invented ones: ledger_lib.agent_id_from_cwd() no longer falls back to a
-// bare directory-name guess for an out-of-tree cwd (ee2889c, 2026-08-26) --
-// a fake path like '/install/agents/sam' now resolves to the main agent
-// instead of 'sam', which would make every fixture agent collapse onto the
-// same identity. Using real agents/<name> paths exercises the intended
-// sub-agent resolution branch regardless of that fallback's behaviour.
-const agentCwd = (name: string) => join(ROOT, 'agents', name)
+// <tmp>/scripts symlinked to the repo's scripts/, so ledger_lib.db_path()
+// (dirname(dirname(abspath(__file__)))) resolves to <tmp>/store/claudeclaw.db
+// -- the symlink keeps the hook's __file__ rooted under DB_DIR, not ROOT.
+function installHooksDir(tmp: string): string {
+  const link = join(tmp, 'scripts')
+  if (!existsSync(link)) symlinkSync(join(ROOT, 'scripts'), link)
+  return join(link, 'hooks')
+}
+
+// agent_id_from_cwd() derives the "install" the SAME way (from ledger_lib's
+// own __file__: dirname(dirname(abspath(__file__))), unresolved), so a cwd
+// must be in-tree under THAT tmp install, not under ROOT, or it falls
+// outside every installs entry and collapses to the main agent for every
+// name (ee2889c's safeguard against inventing an id from an out-of-tree
+// path -- firing here for the wrong reason). agent_id_from_cwd does pure
+// string-prefix matching, no filesystem access, so this path never needs to
+// exist on disk -- it only needs to read as <tmp install>/agents/<name>.
+const agentCwd = (name: string) => join(DB_DIR, 'agents', name)
 
 function runHook(prompt: string, cwd = agentCwd('sam')): string {
   return execFileSync('python3', [HOOK], {
     input: JSON.stringify({ prompt, cwd }),
     encoding: 'utf-8',
-    env: { ...process.env, LEDGER_DB_PATH: DB_PATH },
   })
 }
 
@@ -47,7 +61,9 @@ function wrapped(msgId: number, body = 'valami tartalom'): string {
 describe('message-dedup-guard hook (behavioural)', () => {
   beforeEach(() => {
     DB_DIR = mkdtempSync(join(tmpdir(), 'dedup-guard-'))
-    DB_PATH = join(DB_DIR, 'test.db')
+    mkdirSync(join(DB_DIR, 'store'), { recursive: true })
+    HOOK = join(installHooksDir(DB_DIR), 'message-dedup-guard.py')
+    DB_PATH = join(DB_DIR, 'store', 'claudeclaw.db')
   })
   afterEach(() => {
     rmSync(DB_DIR, { recursive: true, force: true })
@@ -85,7 +101,6 @@ describe('message-dedup-guard hook (behavioural)', () => {
     const out = execFileSync('python3', [HOOK], {
       input: 'not json at all {{{',
       encoding: 'utf-8',
-      env: { ...process.env, LEDGER_DB_PATH: DB_PATH },
     })
     expect(out.trim()).toBe('')
   })
