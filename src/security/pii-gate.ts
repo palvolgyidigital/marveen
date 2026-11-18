@@ -389,6 +389,302 @@ export const PII_EXCEPTIONS: readonly PiiException[] = Object.freeze([
       "that points under an agent's own store directory (scripts/mailerlite-report.ts:152), " +
       'not a real human home-directory path. Scoped to this one file and this one matched value.',
   },
+  {
+    path: 'src/__tests__/agent-memory-scope.test.ts',
+    sha256: '3b1e1096eaa8654b84315d7538d47b7efdc2139f8ed4c429388c78350cf368e4',
+    reason:
+      "False positive (Pedro, msg 8044): the matched text is a systemd user-slice unit name " +
+      '(service manager naming convention: a user id, then a literal ".service" suffix), inside ' +
+      "a synthetic /proc/<pid>/cgroup test fixture (resolveTmuxSpawnScopeUnit's own test), not an " +
+      'e-mail address -- it only has the word-at-word-dot-word shape the detector looks for.',
+  },
+  // The 35 entries below (upstream's own SUPPORTKULCS1109 series, #2743/ENVATLEAK1114, and
+  // MIOAGENTINSTALL1114) all passed Pedro's mechanical standard (msg 8044, 2026-11-18): each
+  // line is byte-identical to upstream/develop's own current copy of the same file, verified
+  // by direct comparison (git show <commit>:<path> line N == git show upstream/develop:<path>,
+  // same line, byte for byte) before this exception was written -- already-public upstream
+  // content, not our data, so excepting it is not waiving a review, it is recognizing content
+  // that was never ours to begin with.
+  {
+    path: 'scripts/support-dispatch.sh',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'scripts/support-standby.mjs',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '0dab02d4f55a47c935ed9a08121ce430f9c2d6234f6c6681ab12eb19677dc8ea',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '13484babab666102645a5009bb623c528baf09fbae410ec2a773cd9847bd6abb',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '1ee51b02b7cc183b5f6bd19ce06bf884a587f161b88f12e7e7a1f31776b696ab',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '28fe5cbbb97aa1975d6d44404179192d1d9529425b6dd701dbe888b148aa1d3e',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '340c8b94a401775bdead46c65be640a7c63b5a3cbefb1036ccf7bc68215b11e8',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '395648d8e967953653fc4d1b3300ae0328c3f680b193b27062f1464a2aa8106b',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '3fda2d11a32ed6566b398f700637bc83e00c440528b7c0c785916a2b7fafee18',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '50e900dbbde9f622dbddb44c1fa8ebba868752d96678dfe6b12cdb591e641af5',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '55f7617869093e62c0c307dd2eb6cc39f7d43dd49a344b6d70bf9f43939994ac',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '67313559239aa51e1b2d6376980877a6bcd1a9addda07ffd5864b6189932aeb1',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '834480b11efa53628d9d70044b3788ac7bb03e792d9a438a4392025ca2213387',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: '9dbefe85f17a098e1995f5d2949a6b59568928adf7d1989aebb9818b668bcbab',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: 'ab2a0a2e45a153f3791946df090eb4845080d7dd5f4004672df765b19947e9e3',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: 'ad94d7d67e3b2d9aaba97eace1c10ae3950d90f3368fff30f11212029e9f4112',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: 'ae62a31480ea9fc40dd66cbc1134ea47b3983d3619086dc735c03c41f428552a',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: 'b273e1b82c2f8cce48f4f90f099d31a21adf037b0e3346b35c751978c610d832',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/fixtures/pane-at-neutralize-vectors.json',
+    sha256: 'b7f6231b5521459e3a4aeb3114dbd703077e15b1dbd37595dd5c8d8f9ab6364d',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/helpers/agent-package-delivery-cases.ts',
+    sha256: '2365b7a0916208d42f7f5a36421015581df974f2561bacba23a1f1565a5d21f8',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/helpers/sk-test-keys.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-fs.test.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-hostkey.test.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-line.test.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-line.test.ts',
+    sha256: '74192633e9102d7082f08b0381501b875ca2e4fca0dd6b84ce42bcef2e9e04a2',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-pins.test.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-pins.test.ts',
+    sha256: '9621b539252016e6dfca1c07d5f17929cac8b92786543fd6f12b21df5ba9503a',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-sshd-run.test.ts',
+    sha256: '6f5a890134440ca71850e8d6ba3bec68cf23ab5e17961b4fbcb8a8180aa094ae',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-access-sshd.test.ts',
+    sha256: '95910683d4118007dd8b6a136118db5cb3b3551b2a70080671bd47c115515f76',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-dispatch.test.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-group-record.test.ts',
+    sha256: '29ce385229e85f719e0ffb9fe7d6bdc8dcbd1be3e9ad021bc68fab4c14eb4eb9',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/__tests__/support-standby.test.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/support-access-line.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'src/support-access-pins.ts',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
+  {
+    path: 'tests/support-standby/standalone-check.mjs',
+    sha256: '571f8ff4c960d22d9d8bb0137ce8c01238ec95cb8a846ff63e3d0b639ba7f6a0',
+    reason:
+      "Pedro's mechanical standard (msg 8044, 2026-11-18): this line is byte-identical to " +
+      "upstream/develop's own current copy of this file (verified by direct comparison before " +
+      'this exception was written) -- already-public upstream content, not our data.',
+  },
 ]);
 
 export function piiHash(matched: string): string {
