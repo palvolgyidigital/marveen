@@ -1530,9 +1530,9 @@
       "expected": false
     },
     {
-      "name": "FLEETTOFLAG1025 v4 (Merlin 34827): a backslash-newline after --to -- the next token is not a known agent name: a send (fail-closed)",
+      "name": "FLEETTOFLAG1025 v4 (Merlin 34827) + BOB7920: a backslash-newline after --to no longer hides a known agent name: not a send",
       "cmd": "$F message post --to \\\n  diszpecser --content-stdin < x.txt",
-      "expected": true
+      "expected": false
     },
     {
       "name": "FLEETTOFLAG1025 v3: 2>&1 after --to -- the tokenizer cuts the segment at &, --to has no value: a send (fail-closed)",
