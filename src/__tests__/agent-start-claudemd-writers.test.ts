@@ -43,6 +43,7 @@ const SEQUENCE = [
   'ensureApiHelperSection(name)',
   'ensureBackgroundCheckpointSection(name)',
   'ensurePaneAtEscapeSection(name)',
+  'ensureDavidGrantsSection(name)',
 ]
 
 describe('the start-time writers of an agent CLAUDE.md', () => {

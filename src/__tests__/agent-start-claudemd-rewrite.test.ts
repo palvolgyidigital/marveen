@@ -80,6 +80,7 @@ const BLOCKS = [
   'api-helper',
   'background-checkpoint',
   'pane-at-escape',
+  'david-grants-fleetwide',
 ]
 
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }))
