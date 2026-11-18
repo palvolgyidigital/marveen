@@ -81,8 +81,16 @@ def fetch(day, creds_path=CREDS):
     c = _creds(creds_path)
     tok = _token(c)
     mb = c["MAILBOX"]
-    start = f"{day.isoformat()}T00:00:00"
-    end = f"{(day + datetime.timedelta(days=1)).isoformat()}T00:00:00"
+    # The window must carry the LOCAL offset. Graph reads an offset-less
+    # startDateTime/endDateTime as UTC, so a bare "T00:00:00" made the window
+    # 01:00..01:00 (CET), and the NEXT day's all-day event (local midnight =
+    # 23:00Z) overlapped it. Measured 2026-11-18: "David szabadsag" (11-19 only)
+    # showed up on 11-18, and Marci caught it in the briefing.
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(TZ)
+    nxt = day + datetime.timedelta(days=1)
+    start = urllib.parse.quote(datetime.datetime(day.year, day.month, day.day, tzinfo=tz).isoformat())
+    end = urllib.parse.quote(datetime.datetime(nxt.year, nxt.month, nxt.day, tzinfo=tz).isoformat())
     url = (f"https://graph.microsoft.com/v1.0/users/{mb}/calendarView"
            f"?startDateTime={start}&endDateTime={end}"
            f"&$orderby=start/dateTime&$top=100"
@@ -98,6 +106,14 @@ def normalise(events, day):
         all_day = bool(e.get("isAllDay"))
         s = e["start"]["dateTime"]
         en = e["end"]["dateTime"]
+        # calendarView also returns an event that only TOUCHES the window (its
+        # end == our local midnight), so the previous day's all-day event came
+        # back too (measured 2026-11-18). Keep only real overlap, in local time
+        # (the Prefer header makes s/en local wall-clock strings).
+        d0 = f"{day.isoformat()}T00:00:00"
+        d1 = f"{(day + datetime.timedelta(days=1)).isoformat()}T00:00:00"
+        if not (s[:19] < d1 and en[:19] > d0):
+            continue
         loc = ((e.get("location") or {}).get("displayName") or "").strip()
         out.append({
             "subject": (e.get("subject") or "").strip(),
