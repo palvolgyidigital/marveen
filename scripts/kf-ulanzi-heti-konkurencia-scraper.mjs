@@ -197,6 +197,45 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Egy-egy atmeneti navigacios timeout (lassu oldal, pillanatnyi halozati akadas)
+// ne vigye el a TELJES futast -- ket futasban ket kulonbozo hoston allt elo
+// ugyanez a 30s page.goto timeout (2026-11-08, syntexshop.hu majd studioeszkozok.hu).
+// 3 probalkozas, novekvo timeout-tal (30s/45s/60s), rovid szunettel kozottuk.
+async function gotoWithRetry(page, url, label) {
+  const timeouts = [30000, 45000, 60000];
+  let lastErr;
+  for (let i = 0; i < timeouts.length; i += 1) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeouts[i] });
+      return;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`  [goto-retry] ${label}: kiserlet ${i + 1}/${timeouts.length} elbukott (${e.message.split('\n')[0]})`);
+      if (i < timeouts.length - 1) await sleep(2000);
+    }
+  }
+  throw lastErr;
+}
+
+// Host-szintu lemez-cache, UGYANAZON a napi futason belul: ha a browser kozben
+// osszeomlik (2026-11-08, "Target page, context or browser has been closed",
+// ok nem azonositva, l. futasido-naplo), a mar sikeresen begyujtott hostokat NE
+// kerjuk le ujra -- csak azt, ami meg hianyzik. A cache a MAI napra szol, nem
+// ovaltogato -- kovetkezo heten ujra teljes futas.
+const CACHE_DIR = path.join(OUT_BASE, '.run-cache');
+
+async function cachedFetch(dateStr, key, fetchFn) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  const p = path.join(CACHE_DIR, `${dateStr}_${key}.json`);
+  if (fs.existsSync(p)) {
+    console.log(`  [cache] ${key}: korabbi sikeres kiserletbol betoltve, nem kerdezem le ujra`);
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  }
+  const result = await fetchFn();
+  fs.writeFileSync(p, JSON.stringify(result), 'utf-8');
+  return result;
+}
+
 // "Load more" gombos infinite-scroll oldalakhoz (syntexshop.hu, film-technika.com):
 // DETERMINISZTIKUS leallasi feltetel, NEM idozites-fuggo. Minden kattintas UTAN
 // a tenyleges DOM-elemszamot nezzuk (nem fix sleep-et) -- a megallas kizarolag
@@ -265,7 +304,7 @@ async function fetchUnasDataSku(page, host, query, label) {
       ? `https://${host}/shop_search.php?search=${encodeURIComponent(query)}`
       : `https://${host}/shop_search.php?search=${encodeURIComponent(query)},${pageNum}&infinite_scroll=1&ajax_nodesign=1`;
     assertHost(url, label);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await gotoWithRetry(page, url, url);
     await page.waitForTimeout(500);
     if (pageNum === 1) {
       const text = await page.evaluate(() => document.body.innerText);
@@ -332,7 +371,7 @@ async function fetchFotoplus(page, query) {
       ? `https://${host}/shop_search.php?search=${encodeURIComponent(query)}`
       : `https://${host}/shop_search.php?search=${encodeURIComponent(query)},${pageNum}&infinite_scroll=1&ajax_nodesign=1`;
     assertHost(url, 'fotoplus.hu');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await gotoWithRetry(page, url, url);
     await page.waitForTimeout(500);
     const text = await page.evaluate(() => document.body.innerText);
     if (pageNum === 1) {
@@ -368,7 +407,7 @@ async function fetchKamerapro(page, query) {
       ? `https://${host}/shop_search.php?search=${encodeURIComponent(query)}`
       : `https://${host}/shop_search.php?search=${encodeURIComponent(query)},${pageNum}&infinite_scroll=1&ajax_nodesign=1`;
     assertHost(url, 'kamerapro.hu');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await gotoWithRetry(page, url, url);
     await page.waitForTimeout(600);
     if (pageNum === 1) {
       const text = await page.evaluate(() => document.body.innerText);
@@ -434,7 +473,7 @@ async function fetchStudioeszkozok(page, query) {
       ? `https://studioeszkozok.hu/kereses?s=${encodeURIComponent(query)}`
       : `https://studioeszkozok.hu/kereses/oldal/${pageNum}?s=${encodeURIComponent(query)}`;
     assertHost(url, 'studioeszkozok.hu');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await gotoWithRetry(page, url, url);
     await page.waitForTimeout(500);
     const text = await page.evaluate(() => document.body.innerText);
     if (pageNum === 1) {
@@ -463,7 +502,7 @@ function extractSyntexCode(url) {
 async function fetchSyntexshop(page, query) {
   const url = `https://www.syntexshop.hu/search?q=${encodeURIComponent(query)}`;
   assertHost(url, 'syntexshop.hu');
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await gotoWithRetry(page, url, url);
   await page.waitForTimeout(800);
   const text0 = await page.evaluate(() => document.body.innerText);
   const m0 = text0.match(/(\d+)\s*term[ée]k/i);
@@ -510,7 +549,7 @@ async function fetchUnidomestore(page, query) {
   for (;;) {
     const url = `https://www.unidomestore.hu/index.php?route=product/list&keyword=${encodeURIComponent(query)}&description=1&page=${pageNum}`;
     assertHost(url, 'unidomestore.hu');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await gotoWithRetry(page, url, url);
     await page.waitForTimeout(600);
     const items = await page.evaluate(() => {
       const cards = Array.from(document.querySelectorAll('.product-card'));
@@ -550,7 +589,7 @@ function extractFilmtechnikaCode(name) {
 async function fetchFilmtechnika(page, query) {
   const url = `https://www.film-technika.com/hu/kereses/?string=${encodeURIComponent(query)}`;
   assertHost(url, 'film-technika.com');
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await gotoWithRetry(page, url, url);
   await page.waitForTimeout(800);
 
   const { finalCount, clicks, hitCap } = await clickLoadMoreUntilStable(page, {
@@ -779,56 +818,76 @@ async function main() {
   const { file: ownCatalogFile, catalog: ownCatalog } = loadOwnCatalog();
   console.log(`Sajat katalogus forras: ${ownCatalogFile}, aktiv K&F+Ulanzi cikk: ${ownCatalog.length}`);
 
+  const dateStr = todayBudapest();
+
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  let page = await browser.newPage();
+
+  // Minden host ELOTT friss lap, a regi bezarasaval -- a 2026-11-08-i ket futasban
+  // a browser PONT a syntexshop utani hoston (unidomestore) omlott ossze
+  // ("Target page, context or browser has been closed"), eltero oldalszamon
+  // mindketszer, tehat nem egy fix tartalmi hiba, hanem valoszinuleg a nagy
+  // (syntexshop ~90 "load more" kattintas) oldalon egy szalon felhalmozodott
+  // allapot/eroforras-terheles. Egy uj page minden host elott olcso, es ezt
+  // kerulgeti.
+  async function freshPage() {
+    if (page && !page.isClosed()) await page.close().catch(() => {});
+    return browser.newPage();
+  }
 
   const coverage = {};
 
   console.log('--- pdb.hu (sajat) ---');
-  const pdbKf = await fetchUnasDataSku(page, 'www.pdb.hu', 'K&F Concept', 'pdb.hu');
-  const pdbUl = await fetchUnasDataSku(page, 'www.pdb.hu', 'Ulanzi', 'pdb.hu');
+  const pdbKf = await cachedFetch(dateStr, 'pdb_kf', () => fetchUnasDataSku(page, 'www.pdb.hu', 'K&F Concept', 'pdb.hu'));
+  const pdbUl = await cachedFetch(dateStr, 'pdb_ul', () => fetchUnasDataSku(page, 'www.pdb.hu', 'Ulanzi', 'pdb.hu'));
   coverage.pdb = { kf: pdbKf, ul: pdbUl };
   console.log(`pdb.hu K&F: label=${pdbKf.totalLabel} collected=${pdbKf.collected} | Ulanzi: label=${pdbUl.totalLabel} collected=${pdbUl.collected}`);
   await sleep(1000);
 
+  page = await freshPage();
   console.log('--- fotoplus.hu ---');
-  const fotoKf = await fetchFotoplus(page, 'K&F Concept');
-  const fotoUl = await fetchFotoplus(page, 'Ulanzi');
+  const fotoKf = await cachedFetch(dateStr, 'fotoplus_kf', () => fetchFotoplus(page, 'K&F Concept'));
+  const fotoUl = await cachedFetch(dateStr, 'fotoplus_ul', () => fetchFotoplus(page, 'Ulanzi'));
   coverage.fotoplus = { kf: fotoKf, ul: fotoUl };
   console.log(`fotoplus.hu K&F: label=${fotoKf.totalLabel} collected=${fotoKf.collected} | Ulanzi: label=${fotoUl.totalLabel} collected=${fotoUl.collected}`);
   await sleep(1500);
 
+  page = await freshPage();
   console.log('--- kamerapro.hu ---');
-  const kamKf = await fetchKamerapro(page, 'K&F Concept');
-  const kamUl = await fetchKamerapro(page, 'Ulanzi');
+  const kamKf = await cachedFetch(dateStr, 'kamerapro_kf', () => fetchKamerapro(page, 'K&F Concept'));
+  const kamUl = await cachedFetch(dateStr, 'kamerapro_ul', () => fetchKamerapro(page, 'Ulanzi'));
   coverage.kamerapro = { kf: kamKf, ul: kamUl };
   console.log(`kamerapro.hu K&F: label=${kamKf.totalLabel} collected=${kamKf.collected} | Ulanzi: label=${kamUl.totalLabel} collected=${kamUl.collected}`);
   await sleep(1500);
 
+  page = await freshPage();
   console.log('--- studioeszkozok.hu ---');
-  const studioKf = await fetchStudioeszkozok(page, 'K&F Concept');
-  const studioUl = await fetchStudioeszkozok(page, 'Ulanzi');
+  const studioKf = await cachedFetch(dateStr, 'studioeszkozok_kf', () => fetchStudioeszkozok(page, 'K&F Concept'));
+  const studioUl = await cachedFetch(dateStr, 'studioeszkozok_ul', () => fetchStudioeszkozok(page, 'Ulanzi'));
   coverage.studioeszkozok = { kf: studioKf, ul: studioUl };
   console.log(`studioeszkozok.hu K&F: label=${studioKf.totalLabel} collected=${studioKf.collected} | Ulanzi: label=${studioUl.totalLabel} collected=${studioUl.collected}`);
   await sleep(1500);
 
+  page = await freshPage();
   console.log('--- syntexshop.hu (pan-europai teljes katalogus, ennek megfeleloen nagy) ---');
-  const synKf = await fetchSyntexshop(page, 'K&F Concept');
-  const synUl = await fetchSyntexshop(page, 'Ulanzi');
+  const synKf = await cachedFetch(dateStr, 'syntexshop_kf', () => fetchSyntexshop(page, 'K&F Concept'));
+  const synUl = await cachedFetch(dateStr, 'syntexshop_ul', () => fetchSyntexshop(page, 'Ulanzi'));
   coverage.syntexshop = { kf: synKf, ul: synUl };
   console.log(`syntexshop.hu K&F: label=${synKf.totalLabel} collected=${synKf.collected} (kattintas=${synKf.clicks}, felsokorlat-erintve=${synKf.hitCap}) | Ulanzi: label=${synUl.totalLabel} collected=${synUl.collected} (kattintas=${synUl.clicks}, felsokorlat-erintve=${synUl.hitCap})`);
   await sleep(1500);
 
+  page = await freshPage();
   console.log('--- unidomestore.hu ---');
-  const uniKf = await fetchUnidomestore(page, 'K&F Concept');
-  const uniUl = await fetchUnidomestore(page, 'Ulanzi');
+  const uniKf = await cachedFetch(dateStr, 'unidomestore_kf', () => fetchUnidomestore(page, 'K&F Concept'));
+  const uniUl = await cachedFetch(dateStr, 'unidomestore_ul', () => fetchUnidomestore(page, 'Ulanzi'));
   coverage.unidomestore = { kf: uniKf, ul: uniUl };
   console.log(`unidomestore.hu K&F: collected=${uniKf.collected} | Ulanzi: collected=${uniUl.collected} (nincs oldal-szamlalo)`);
   await sleep(1500);
 
+  page = await freshPage();
   console.log('--- film-technika.com/hu/ (NINCS osszesen-szamlalo az oldalon) ---');
-  const ftKf = await fetchFilmtechnika(page, 'K&F Concept');
-  const ftUl = await fetchFilmtechnika(page, 'Ulanzi');
+  const ftKf = await cachedFetch(dateStr, 'filmtechnika_kf', () => fetchFilmtechnika(page, 'K&F Concept'));
+  const ftUl = await cachedFetch(dateStr, 'filmtechnika_ul', () => fetchFilmtechnika(page, 'Ulanzi'));
   coverage.filmtechnika = { kf: ftKf, ul: ftUl };
   console.log(`film-technika.com K&F: collected=${ftKf.collected} (kattintas=${ftKf.clicks}, felsokorlat-erintve=${ftKf.hitCap}) | Ulanzi: collected=${ftUl.collected} (kattintas=${ftUl.clicks}, felsokorlat-erintve=${ftUl.hitCap})`);
 
@@ -973,7 +1032,6 @@ async function main() {
   }
 
   // --- Excel iras ---
-  const dateStr = todayBudapest();
   const outDir = path.join(OUT_BASE, dateStr);
   const outPath = path.join(outDir, `KF_Ulanzi_konkurencia_arosszehasonlitas_${dateStr}.xlsx`);
   const writeResult = writeFinalExcel(finalRows, outPath, tsLabel);
