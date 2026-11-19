@@ -2497,6 +2497,7 @@ CHAN_UNIT="${SERVICE_ID}-channels"
 MORN_UNIT="${SERVICE_ID}-morning"
 KEEPALIVE_UNIT="${SERVICE_ID}-channel-keepalive-probe"
 INBOX_OBSERVER_UNIT="${SERVICE_ID}-main-inbox-observer"
+SILENCE_WATCHDOG_UNIT="${SERVICE_ID}-agent-silence-watchdog"
 
 # Detect the host timezone so the scheduled-task runner (which reads
 # cron expressions in Node's local TZ) fires at the operator's wall
@@ -2740,6 +2741,50 @@ AccuracySec=30s
 WantedBy=timers.target
 EOF
 
+# ${SILENCE_WATCHDOG_UNIT}.service/.timer -- out-of-process silence watchdog for
+# every fleet agent (card 53f4486a; the install wiring itself is cards
+# 24c7aaa5/4a2d243f). scripts/agent-silence-watchdog.sh and its scripts/systemd/
+# templates were merged on their own, same defect as the inbox observer above:
+# the repo shipping the script is not enough if nothing schedules it.
+#
+# No AGENT_SILENCE_ALERT_TELEGRAM=1 here: Marci's explicit request (2026-10-18
+# 18:43, "Eleve nem kerem ezeket az uzeneteket. Folyamatosan jonnek.") turned the
+# Telegram alert off by default in the script itself -- the watchdog still
+# measures and logs (store/agent-silence-watchdog.log) without it. Setting the
+# env var here would silently re-enable what Marci turned off.
+cat >"$SYSTEMD_DIR/${SILENCE_WATCHDOG_UNIT}.service" <<EOF
+[Unit]
+Description=${BOT_NAME} out-of-process silence watchdog for every fleet agent (card 53f4486a)
+
+[Service]
+Type=oneshot
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/scripts/agent-silence-watchdog.sh
+Environment=PATH=$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$HOME
+${TZ_LINE}
+StandardOutput=append:$INSTALL_DIR/store/agent-silence-watchdog.log
+StandardError=append:$INSTALL_DIR/store/agent-silence-watchdog.log
+EOF
+
+# Deliberately NOT bound to the dashboard/channels units: the exact failure mode
+# this observes (2026-09-26/28, card 53f4486a) had the scheduler itself still
+# ticking while every agent stayed silent, so the timer must survive both "the
+# dashboard is down" AND "the dashboard is up but nothing downstream of it is
+# working" -- a dashboard-bound timer would be just as blind in the second case.
+cat >"$SYSTEMD_DIR/${SILENCE_WATCHDOG_UNIT}.timer" <<EOF
+[Unit]
+Description=${BOT_NAME} agent-silence watchdog every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
 # marveen-host-watchdog.service -- host/WSL-VM restart detector (btime-based).
 # Distinguishes a whole-VM restart (all units down at once, NOT an app crash)
 # from a service crash, and Telegrams it. See scripts/host-restart-watchdog.sh.
@@ -2825,12 +2870,12 @@ if pidof systemd >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; the
   # ${MORN_UNIT}.timer is deliberately NOT in this list -- the seeded
   # reggeli-napindito scheduled task already delivers the morning briefing at
   # 07:30 from inside the live channel session. See the timer's comment above.
-  if systemctl --user enable "${DASH_UNIT}" "${CHAN_UNIT}" "${KEEPALIVE_UNIT}.timer" "${INBOX_OBSERVER_UNIT}.timer" "${SERVICE_ID}-host-watchdog.service" 2>/dev/null; then
+  if systemctl --user enable "${DASH_UNIT}" "${CHAN_UNIT}" "${KEEPALIVE_UNIT}.timer" "${INBOX_OBSERVER_UNIT}.timer" "${SILENCE_WATCHDOG_UNIT}.timer" "${SERVICE_ID}-host-watchdog.service" 2>/dev/null; then
     ok "systemd unitok generalva es engedelyezve"
   else
     warn "A unit-fajlok elkeszultek, de az engedelyezesuk nem sikerult -- ujrainditas utan a szolgaltatasok nem indulnak el maguktol."
-    # ALL FOUR units the enable above covers, not just the two services. A
-    # command that silently drops the keepalive probe or the watchdog would leave
+    # ALL SIX units the enable above covers, not just the two services. A
+    # command that silently drops the keepalive probe or a watchdog would leave
     # them disabled while the operator sees no error and believes the fix worked
     # -- an incomplete instruction ends the same way as a false claim.
     # The label gets its own line. With "Javitas most:" in front of the command,
@@ -2843,7 +2888,7 @@ if pidof systemd >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; the
     echo -e "  ${DIM}Javitas most:${NC}"
     echo -e "  ${DIM}systemctl --user enable \\${NC}"
     echo -e "  ${DIM}    ${DASH_UNIT} ${CHAN_UNIT} \\${NC}"
-    echo -e "  ${DIM}    ${KEEPALIVE_UNIT}.timer ${INBOX_OBSERVER_UNIT}.timer ${SERVICE_ID}-host-watchdog.service${NC}"
+    echo -e "  ${DIM}    ${KEEPALIVE_UNIT}.timer ${INBOX_OBSERVER_UNIT}.timer ${SILENCE_WATCHDOG_UNIT}.timer ${SERVICE_ID}-host-watchdog.service${NC}"
   fi
   systemctl --user start "${DASH_UNIT}" "${CHAN_UNIT}" 2>/dev/null || true
   sleep 2
@@ -2857,17 +2902,17 @@ if pidof systemd >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; the
     fi
   done
   [ "$SVCFAIL" -eq 0 ] && ok "Mindket szolgaltatas fut"
-  # TIMERSTART1011: `enable` alone does not start a timer. Both timers fire on
-  # OnBootSec=90s, which on a host that has been up for a while has already
-  # passed, so without a start they stay inactive until the next reboot. The
-  # keepalive probe then never refreshes, and the channel monitor reads the
-  # stale keep-alive as a wedged session and respawns the main agent (measured
-  # on a fresh Linux install: three hard restarts in 80 minutes). One start per
-  # timer, after the services, so a timer that failed to install can take down
-  # neither the services nor the other timer, and a failed start never stops the
-  # installer; not part of SVCFAIL, since the bridge itself runs, but named with
-  # the fix.
-  for tmr in "${KEEPALIVE_UNIT}.timer" "${INBOX_OBSERVER_UNIT}.timer"; do
+  # TIMERSTART1011: `enable` alone does not start a timer. These timers fire on
+  # an OnBootSec (90s for the first two, 5min for the watchdog) that on a host
+  # which has been up for a while has already passed, so without a start they
+  # stay inactive until the next reboot. The keepalive probe then never
+  # refreshes, and the channel monitor reads the stale keep-alive as a wedged
+  # session and respawns the main agent (measured on a fresh Linux install:
+  # three hard restarts in 80 minutes). One start per timer, after the
+  # services, so a timer that failed to install can take down neither the
+  # services nor another timer, and a failed start never stops the installer;
+  # not part of SVCFAIL, since the bridge itself runs, but named with the fix.
+  for tmr in "${KEEPALIVE_UNIT}.timer" "${INBOX_OBSERVER_UNIT}.timer" "${SILENCE_WATCHDOG_UNIT}.timer"; do
     systemctl --user start "$tmr" 2>/dev/null || true
     if systemctl --user is-active --quiet "$tmr" 2>/dev/null; then
       ok "$tmr fut"

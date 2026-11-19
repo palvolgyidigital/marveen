@@ -1320,6 +1320,79 @@ EOF
   return 0
 }
 
+# Agent-silence watchdog, for hosts that already exist (cards 24c7aaa5/4a2d243f).
+# scripts/agent-silence-watchdog.sh and its scripts/systemd/*.service/.timer
+# templates were merged (card 53f4486a) but nothing installs them -- same
+# defect install_main_inbox_observer_unit above closes for the inbox observer,
+# same fix shape. Linux/systemd only: the card titles name update.sh and
+# install-linux.sh specifically, and there is no launchd counterpart to this
+# watchdog (unlike the inbox observer).
+install_agent_silence_watchdog_unit() {
+  [ -x "$INSTALL_DIR/scripts/agent-silence-watchdog.sh" ] || return 0
+  [ "$(uname -s)" = "Linux" ] || return 0
+  units_dir="${1:-$HOME/.config/systemd/user}"
+  [ -d "$units_dir" ] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  for chan_unit in "$units_dir/"*-channels.service; do
+    [ -f "$chan_unit" ] || continue
+    _svc_id="$(basename "$chan_unit" -channels.service)"
+    _sw_unit="${_svc_id}-agent-silence-watchdog"
+    if [ -f "$units_dir/${_sw_unit}.timer" ]; then
+      ensure_timer_running "${_sw_unit}.timer"
+      continue
+    fi
+    _bot_name="$(sed -n 's/^BOT_NAME=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | tr -d '"')"
+    [ -n "$_bot_name" ] || _bot_name="Marveen"
+    _tz_line="# no explicit TZ detected; inheriting host default"
+    _tz="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)"
+    [ -n "$_tz" ] && [ "$_tz" != "UTC" ] && _tz_line="Environment=TZ=$_tz"
+    # No AGENT_SILENCE_ALERT_TELEGRAM=1 here: Marci's explicit request (2026-10-18
+    # 18:43, "Eleve nem kerem ezeket az uzeneteket. Folyamatosan jonnek.") turned
+    # the Telegram alert off by default in the script itself -- the watchdog still
+    # measures and logs (store/agent-silence-watchdog.log) without it. Setting the
+    # env var here would silently re-enable what Marci turned off.
+    cat >"$units_dir/${_sw_unit}.service" <<EOF
+[Unit]
+Description=${_bot_name} out-of-process silence watchdog for every fleet agent (card 53f4486a)
+
+[Service]
+Type=oneshot
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/scripts/agent-silence-watchdog.sh
+Environment=PATH=$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$HOME
+${_tz_line}
+StandardOutput=append:$INSTALL_DIR/store/agent-silence-watchdog.log
+StandardError=append:$INSTALL_DIR/store/agent-silence-watchdog.log
+EOF
+    # Deliberately NOT bound to the dashboard/channels units: the exact failure
+    # mode this observes (2026-09-26/28, card 53f4486a) had the scheduler itself
+    # still ticking while every agent stayed silent, so the timer must survive
+    # both "the dashboard is down" AND "the dashboard is up but nothing
+    # downstream of it is working" -- a dashboard-bound timer would be just as
+    # blind in the second case.
+    cat >"$units_dir/${_sw_unit}.timer" <<EOF
+[Unit]
+Description=${_bot_name} agent-silence watchdog every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload 2>/dev/null || true
+    if systemctl --user enable --now "${_sw_unit}.timer" >/dev/null 2>&1; then
+      echo -e "  Agent-silence watchdog telepitve (30 percenkent, Telegram-ertesites kikapcsolva, csak naplo): ${_sw_unit}.timer"
+    else
+      echo -e "  FIGYELEM: ${_sw_unit}.timer unit megirva, de az engedelyezese nem sikerult -- inditsd kezzel: systemctl --user enable --now ${_sw_unit}.timer"
+    fi
+  done
+  return 0
+}
+
 # UPDUNITTGENV930: #1450 took `Environment=TELEGRAM_ENV=<home>/.claude/channels/telegram/.env`
 # out of the two notifier units install-linux.sh writes (<slug>-host-watchdog.service and
 # <slug>-notify@.service), but only for NEW installs: an existing host keeps the line,
@@ -1434,6 +1507,7 @@ run_unit_maintenance() {
   install_keepalive_probe_launchd "$@"
   install_stuck_modal_guard_launchd "$@"
   install_main_inbox_observer_unit "$@"
+  install_agent_silence_watchdog_unit "$@"
   strip_legacy_notifier_telegram_env "$@"
   park_morning_timer "$@"
   scrub_rc_secrets
