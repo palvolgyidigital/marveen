@@ -67,6 +67,29 @@ def hivas(tok: str, mod: str, ut: str, payload: dict) -> dict:
         return json.loads(test) if test else {}
 
 
+# A sima POST .../attachments ~3 MB-ig mukodik (a teljes keres 4 MB-os limitje miatt).
+# Folotte upload session kell. Mert eset: 2026-11-12, a jatekbolti prezentacio 13 MB volt.
+NAGY_MELLEKLET = 3 * 1024 * 1024
+DARAB = 320 * 1024 * 10  # 3.2 MB, a 320 KiB tobbszorose (Graph kovetelmeny)
+
+
+def nagy_melleklet(tok: str, mailbox: str, mid: str, nev: str, tartalom: bytes) -> None:
+    s = hivas(tok, 'POST', f'/users/{mailbox}/messages/{mid}/attachments/createUploadSession', {
+        'AttachmentItem': {'attachmentType': 'file', 'name': nev, 'size': len(tartalom)}})
+    url = s['uploadUrl']
+    ossz = len(tartalom)
+    for kezd in range(0, ossz, DARAB):
+        resz = tartalom[kezd:kezd + DARAB]
+        veg = kezd + len(resz) - 1
+        # Az uploadUrl maga hordozza a jogot: Authorization fejlec NEM kell (es nem is szabad).
+        req = urllib.request.Request(url, method='PUT', data=resz, headers={
+            'Content-Length': str(len(resz)),
+            'Content-Range': f'bytes {kezd}-{veg}/{ossz}',
+            'Content-Type': 'application/octet-stream'})
+        with urllib.request.urlopen(req) as r:
+            r.read()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('creds')
@@ -77,6 +100,10 @@ def main() -> int:
     # SSL-level piszkozataban Abelt masolatba kerte. A Graph ugyanugy fogadja, mint a
     # toRecipients-et; a draft igy a kliensben is cc-vel nyilik meg.
     ap.add_argument('--masolat', action='append', default=[], help='cc cimzett(ek)')
+    # TITKOS MASOLAT (bcc): Marci kerese, 2026-11-12 13:01 (Telegram 12493, 12496), a
+    # jatekbolti megkereseshez: egy levelben sok cim, de mindenki csak magat lassa.
+    # A cimeket fajlbol veszi (soronkent egy), hogy ne a parancssorba keruljenek.
+    ap.add_argument('--titkos-fajl', default='', help='bcc cimek fajlbol, soronkent egy')
     ap.add_argument('--melleklet', action='append', default=[])
     ap.add_argument('--html', action='store_true',
                     help='a torzs HTML (contentType=HTML). Nelkule sima szoveg.')
@@ -95,17 +122,26 @@ def main() -> int:
     }
     if a.masolat:
         uj['ccRecipients'] = [{'emailAddress': {'address': x}} for x in a.masolat]
+    titkos = []
+    if a.titkos_fajl:
+        titkos = [x.strip() for x in open(a.titkos_fajl, encoding='utf-8') if x.strip()]
+        uj['bccRecipients'] = [{'emailAddress': {'address': x}} for x in titkos]
     d = hivas(tok, 'POST', f'/users/{mailbox}/messages', uj)
     mid = d['id']
     print(f'PISZKOZAT LETREHOZVA: {mailbox}')
     print(f'  id={mid}')
     print(f'  targy={a.targy!r}  cimzett={a.cimzett or "(nincs)"}  masolat={a.masolat or "(nincs)"}')
+    print(f'  titkos masolat: {len(titkos)} cim')
     print(f'  torzs {len(torzs)} karakter, contentType={tipus_torzs}')
 
     for ut in a.melleklet:
         nev = os.path.basename(ut)
         tartalom = open(ut, 'rb').read()
         tipus = mimetypes.guess_type(nev)[0] or 'application/octet-stream'
+        if len(tartalom) > NAGY_MELLEKLET:
+            nagy_melleklet(tok, mailbox, mid, nev, tartalom)
+            print(f'  melleklet: {nev} ({len(tartalom)} bajt, upload session)')
+            continue
         hivas(tok, 'POST', f'/users/{mailbox}/messages/{mid}/attachments', {
             '@odata.type': '#microsoft.graph.fileAttachment',
             'name': nev, 'contentType': tipus,
